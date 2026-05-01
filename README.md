@@ -10,6 +10,10 @@ This scaffold now covers:
 - Milestone 2 parser starter (`rfeye-spectral-parse`) for ath10k TLV samples.
 - Admin CGI snapshot endpoint wired to parser output.
 
+Architecture baseline (node + Linux split):
+
+- `docs/ARCHITECTURE.md`
+
 ## Goals
 
 - Fit inside an AREDN firmware image as a small OpenWrt package.
