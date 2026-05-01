@@ -1,58 +1,95 @@
 # AREDN RFeye
 
-AREDN RFeye is an AREDN-native RF spectrum visibility tool for ath10k-based 802.11ac nodes. The goal is to provide an AirView-like experience that fits inside an AREDN node, uses the AREDN app menu/UI conventions, and relies on OpenWrt `PACKAGE_ATH_SPECTRAL` instead of external SDR hardware.
+AREDN RFeye is an AREDN-native RF spectrum visibility tool for ath10k-based 802.11ac nodes. The goal is to provide an AirView-like experience that fits inside an AREDN node, uses AREDN app conventions, and relies on OpenWrt `PACKAGE_ATH_SPECTRAL` where available.
 
-This repository starts as a development scaffold. The first milestone is to prove that the target node exposes ath10k spectral scan controls and can safely display live RF/survey state from inside the node UI.
+## Current status
+
+This scaffold now covers:
+
+- Milestone 1 support probe (`rfeye-probe`) for debugfs/spectral/survey checks.
+- Milestone 2 parser starter (`rfeye-spectral-parse`) for ath10k TLV samples.
+- Admin CGI snapshot endpoint wired to parser output.
 
 ## Goals
 
 - Fit inside an AREDN firmware image as a small OpenWrt package.
-- Appear in the AREDN Apps menu using `/www/cgi-bin/apps/<app>/user`, `/www/cgi-bin/apps/<app>/admin`, and `/www/apps/<app>/icon.svg`.
-- Use the same visual language as the AREDN node UI by loading `/a/css/theme.css`, `/a/css/user.css`, and `/a/css/mobile.css`.
-- Probe ath10k spectral support through debugfs.
-- Collect channel survey data through `iw` / nl80211.
-- Add a live FFT/waterfall view after binary TLV parsing is implemented.
-- Add practical interference classification for mesh troubleshooting.
+- Appear in AREDN Apps menu under `/www/cgi-bin/apps/rfeye/...`.
+- Avoid continuous flash writes (keep high-rate data in RAM/tmpfs).
+- Expose live FFT/waterfall/utilization views in lightweight UI.
 
-## Non-goals
+## Probe script
 
-- This is not a calibrated lab spectrum analyzer.
-- This is not a regulatory DFS/radar detector.
-- This should not write continuous high-rate RF data to node flash.
-- This should not channel-hop a production mesh radio without an explicit warning and operator action.
+Run on an AREDN/OpenWrt node:
 
-## Repository layout
-
-```text
-package/aredn-rfeye/        OpenWrt/AREDN package skeleton
-package/aredn-rfeye/files/  Files installed into the node image
-docs/                       Development approach, AREDN integration notes, OpenClaw brief
+```sh
+sh /usr/lib/rfeye/rfeye-probe.sh
 ```
 
-## Initial package contents
+Optional short sample capture from `spectral_scan0`:
 
-The first package scaffold installs:
-
-- `rfeye-probe`: a small shell probe for debugfs, ath10k spectral controls, and survey counters.
-- `rfeye` AREDN app entry under `/www/cgi-bin/apps/rfeye/`.
-- `rfeye` icon under `/www/apps/rfeye/icon.svg`.
-- `/etc/config/rfeye` default configuration.
-
-## Build concept
-
-In an AREDN/OpenWrt build tree, this package should eventually be included as a feed package and selected for supported ath10k AC targets only.
-
-Required kernel/build features for real spectral capture:
-
-```text
-CONFIG_PACKAGE_ATH_DEBUG=y
-CONFIG_PACKAGE_ATH_SPECTRAL=y
-CONFIG_KERNEL_DEBUG_FS=y
-CONFIG_KERNEL_RELAY=y
+```sh
+sh /usr/lib/rfeye/rfeye-probe.sh --capture-bytes 4096 --capture-dir /tmp
 ```
 
-For ath10k AC devices, the node must also have the appropriate `kmod-ath10k` or `kmod-ath10k-ct` driver and firmware package.
+The probe reports:
 
-## Current status
+- debugfs availability
+- phy list
+- ath10k spectral file presence
+- `iw dev <iface> survey dump` field availability (`active`, `busy`, `tx`, `rx`, `noise`)
 
-Scaffold only. The UI can probe support and display survey/debugfs state. The binary `spectral_scan0` TLV parser and live waterfall renderer are planned next.
+## Parser (Milestone 2)
+
+Parser source:
+
+- `src/rfeye_spectral_parse.c`
+
+Build locally:
+
+```sh
+mkdir -p build
+cc -O2 -Wall -Wextra -o build/rfeye-spectral-parse src/rfeye_spectral_parse.c
+```
+
+Parse a captured ath10k sample stream:
+
+```sh
+./build/rfeye-spectral-parse --input /tmp/rfeye-sample-phy0.bin --phy phy0 --limit 10 --bins 64
+```
+
+Example output (one compact JSON frame per line):
+
+```json
+{"phy":"phy0","freq1_mhz":5745,"freq2_mhz":0,"width_mhz":80,"noise":-96,"rssi":42,"max_index":115,"max_magnitude":900,"tsf":123456789,"bins":[12,13,15,18]}
+```
+
+Fixture + replay helpers:
+
+```sh
+python3 scripts/make-test-fixture.py --out fixtures/sample-ath10k.bin --bins 32
+scripts/rfeye-replay.sh fixtures/sample-ath10k.bin --phy phy0
+```
+
+## Admin CGI snapshot endpoint
+
+Installed path:
+
+- `/www/cgi-bin/apps/rfeye/admin/snapshot.sh`
+
+It captures a short sample from `spectral_scan0`, parses one frame with
+`/usr/lib/rfeye/rfeye-spectral-parse`, and returns:
+
+```json
+{"ok":true,"frame":{...}}
+```
+
+Query args:
+
+- `phy` (default `phy0`)
+- `bins` (default `64`)
+
+Example:
+
+```sh
+curl "http://<node>/cgi-bin/apps/rfeye/admin/snapshot.sh?phy=phy0&bins=64"
+```

@@ -1,0 +1,7 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="128" height="128" viewBox="0 0 128 128">
+  <rect x="0" y="0" width="128" height="128" rx="18" fill="#111827"/>
+  <path d="M16 96 L28 78 L42 84 L56 60 L72 72 L88 44 L112 32" stroke="#22d3ee" stroke-width="6" fill="none"/>
+  <circle cx="88" cy="44" r="6" fill="#f59e0b"/>
+  <text x="16" y="118" fill="#e5e7eb" font-size="18" font-family="sans-serif">RFeye</text>
+</svg>
+
