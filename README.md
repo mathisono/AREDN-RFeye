@@ -9,6 +9,7 @@ This scaffold now covers:
 - Milestone 1 support probe (`rfeye-probe`) for debugfs/spectral/survey checks.
 - Milestone 2 parser starter (`rfeye-spectral-parse`) for ath10k TLV samples.
 - Admin CGI snapshot endpoint wired to parser output.
+- First `rfeye-agent` skeleton with strict capture time/memory limits.
 
 Architecture baseline (node + Linux split):
 
@@ -73,6 +74,25 @@ Fixture + replay helpers:
 python3 scripts/make-test-fixture.py --out fixtures/sample-ath10k.bin --bins 32
 scripts/rfeye-replay.sh fixtures/sample-ath10k.bin --phy phy0
 ```
+
+## rfeye-agent skeleton (status/start/stop/snapshot)
+
+Node command:
+
+- `/usr/sbin/rfeye-agent status`
+- `/usr/sbin/rfeye-agent start [seconds bins phy]`
+- `/usr/sbin/rfeye-agent stop`
+- `/usr/sbin/rfeye-agent snapshot`
+
+Safety/limits enforced by config (`/etc/config/rfeye`):
+
+- `max_runtime_seconds` (hard cap for captures)
+- `max_capture_bytes` (hard cap for capture memory)
+- `snapshot_bytes` (hard cap for snapshot reads)
+
+JSON CGI bridge endpoint:
+
+- `/www/cgi-bin/apps/rfeye/data/agent.sh?action=status|start|stop|snapshot`
 
 ## Admin CGI snapshot endpoint
 

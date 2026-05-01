@@ -21,9 +21,14 @@ define Package/aredn-rfeye/description
 endef
 
 define Build/Compile
+	$(TARGET_CC) $(TARGET_CFLAGS) -O2 -Wall -Wextra \
+		-o $(PKG_BUILD_DIR)/rfeye-spectral-parse \
+		./src/rfeye_spectral_parse.c
 endef
 
 define Package/aredn-rfeye/install
+	$(INSTALL_DIR) $(1)/usr/lib/rfeye
+	$(INSTALL_BIN) $(PKG_BUILD_DIR)/rfeye-spectral-parse $(1)/usr/lib/rfeye/rfeye-spectral-parse
 	$(CP) ./files/* $(1)/
 endef
 

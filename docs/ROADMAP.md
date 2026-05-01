@@ -9,12 +9,12 @@
 
 ## Phase 2 (node service hardening)
 
-- [ ] `rfeye-agent` / `spectrald` daemon skeleton
-- [ ] `/etc/config/rfeye` defaults and limits
-- [ ] time-limited capture windows
+- [x] `rfeye-agent` daemon skeleton (`status/start/stop/snapshot`)
+- [x] `/etc/config/rfeye` defaults and strict limits
+- [x] time-limited capture windows
 - [ ] RAM-only ring buffer
-- [ ] rate throttling and memory guardrails
-- [ ] graceful unsupported/fail-closed behavior
+- [x] memory guardrails (hard capture byte caps)
+- [ ] graceful unsupported/fail-closed behavior (baseline checks added)
 
 ## Phase 3 (data APIs)
 

@@ -1,0 +1,267 @@
+#!/bin/sh
+# rfeye-agent skeleton: status/start/stop/snapshot with strict limits
+
+set -u
+
+STATE_DIR="/tmp/rfeye"
+PID_FILE="$STATE_DIR/capture.pid"
+END_FILE="$STATE_DIR/capture.end"
+CAPTURE_FILE="$STATE_DIR/latest.tlv"
+CFG_FILE="/etc/config/rfeye"
+
+DEFAULT_PHY="phy0"
+DEFAULT_MODE="background"
+DEFAULT_BINS=128
+DEFAULT_MAX_RUNTIME=20
+DEFAULT_MAX_CAPTURE_BYTES=262144
+DEFAULT_SNAPSHOT_BYTES=8192
+
+mkdir -p "$STATE_DIR"
+
+cfg_get() {
+  # best effort UCI read with safe fallback
+  local key="$1" default="$2"
+  if command -v uci >/dev/null 2>&1; then
+    local v
+    v="$(uci -q get rfeye.main.$key 2>/dev/null || true)"
+    [ -n "$v" ] && { echo "$v"; return 0; }
+  fi
+  echo "$default"
+}
+
+now_s() { date +%s; }
+
+resolve_phy() {
+  local phy
+  phy="$(cfg_get phy "$DEFAULT_PHY")"
+  if [ "$phy" = "auto" ] || [ -z "$phy" ]; then
+    for p in /sys/kernel/debug/ieee80211/phy*; do
+      [ -d "$p" ] || continue
+      basename "$p"
+      return 0
+    done
+    echo "$DEFAULT_PHY"
+    return 0
+  fi
+  echo "$phy"
+}
+
+ath_dir() { echo "/sys/kernel/debug/ieee80211/$1/ath10k"; }
+
+scan_disable() {
+  local phy="$1" ctl="$(ath_dir "$phy")/spectral_scan_ctl"
+  [ -f "$ctl" ] && echo disable > "$ctl" 2>/dev/null || true
+}
+
+running_pid() {
+  [ -f "$PID_FILE" ] || return 1
+  local pid
+  pid="$(cat "$PID_FILE" 2>/dev/null || true)"
+  [ -n "$pid" ] || return 1
+  kill -0 "$pid" 2>/dev/null
+}
+
+cleanup_stale() {
+  if ! running_pid; then
+    rm -f "$PID_FILE" "$END_FILE"
+  fi
+}
+
+status_cmd() {
+  cleanup_stale
+  local phy ath ctl scan0 binsf countf parser iface now end running="false"
+  phy="$(resolve_phy)"
+  ath="$(ath_dir "$phy")"
+  ctl="$ath/spectral_scan_ctl"
+  scan0="$ath/spectral_scan0"
+  binsf="$ath/spectral_bins"
+  countf="$ath/spectral_count"
+  parser="/usr/lib/rfeye/rfeye-spectral-parse"
+
+  iface=""
+  for n in /sys/class/ieee80211/$phy/device/net/*; do
+    [ -e "$n" ] || continue
+    iface="$(basename "$n")"; break
+  done
+
+  if running_pid; then
+    running="true"
+  fi
+
+  now="$(now_s)"
+  end="$(cat "$END_FILE" 2>/dev/null || echo 0)"
+
+  echo "{"
+  echo "  \"ok\": true,"
+  echo "  \"phy\": \"$phy\","
+  echo "  \"running\": $running,"
+  echo "  \"now\": $now,"
+  echo "  \"capture_end\": $end,"
+  echo "  \"limits\": {"
+  echo "    \"max_runtime_seconds\": $(cfg_get max_runtime_seconds "$DEFAULT_MAX_RUNTIME"),"
+  echo "    \"max_capture_bytes\": $(cfg_get max_capture_bytes "$DEFAULT_MAX_CAPTURE_BYTES"),"
+  echo "    \"snapshot_bytes\": $(cfg_get snapshot_bytes "$DEFAULT_SNAPSHOT_BYTES")"
+  echo "  },"
+  echo "  \"paths\": {"
+  echo "    \"spectral_scan_ctl\": $( [ -f "$ctl" ] && echo true || echo false ),"
+  echo "    \"spectral_scan0\": $( [ -f "$scan0" ] && echo true || echo false ),"
+  echo "    \"spectral_bins\": $( [ -f "$binsf" ] && echo true || echo false ),"
+  echo "    \"spectral_count\": $( [ -f "$countf" ] && echo true || echo false ),"
+  echo "    \"parser\": $( [ -x "$parser" ] && echo true || echo false )"
+  echo "  },"
+  echo "  \"iface\": \"$iface\","
+  echo "  \"latest_capture\": \"$CAPTURE_FILE\""
+  echo "}"
+}
+
+capture_worker() {
+  local phy="$1" seconds="$2" bins="$3" max_bytes="$4"
+  local ath ctl scan0 binsf mode iface
+  ath="$(ath_dir "$phy")"
+  ctl="$ath/spectral_scan_ctl"
+  scan0="$ath/spectral_scan0"
+  binsf="$ath/spectral_bins"
+  mode="$(cfg_get scan_mode "$DEFAULT_MODE")"
+
+  if [ ! -f "$scan0" ] || [ ! -f "$ctl" ]; then
+    echo "rfeye-agent: spectral files missing for $phy" >&2
+    exit 1
+  fi
+
+  case "$bins" in
+    64|128|256) ;;
+    *) bins="$DEFAULT_BINS" ;;
+  esac
+
+  [ -f "$binsf" ] && echo "$bins" > "$binsf" 2>/dev/null || true
+  echo "$mode" > "$ctl" 2>/dev/null || true
+  echo trigger > "$ctl" 2>/dev/null || true
+
+  iface=""
+  for n in /sys/class/ieee80211/$phy/device/net/*; do
+    [ -e "$n" ] || continue
+    iface="$(basename "$n")"; break
+  done
+  [ -n "$iface" ] && command -v iw >/dev/null 2>&1 && iw dev "$iface" scan >/dev/null 2>&1 || true
+
+  rm -f "$CAPTURE_FILE"
+  if command -v timeout >/dev/null 2>&1; then
+    timeout "$seconds" dd if="$scan0" of="$CAPTURE_FILE" bs=1 count="$max_bytes" 2>/dev/null || true
+  else
+    # fallback still bounded by count bytes
+    dd if="$scan0" of="$CAPTURE_FILE" bs=1 count="$max_bytes" 2>/dev/null || true
+  fi
+
+  scan_disable "$phy"
+  rm -f "$PID_FILE" "$END_FILE"
+}
+
+start_cmd() {
+  cleanup_stale
+  if running_pid; then
+    echo '{"ok":false,"error":"capture already running"}'
+    return 1
+  fi
+
+  local req_seconds="${1:-$(cfg_get max_runtime_seconds "$DEFAULT_MAX_RUNTIME")}" 
+  local req_bins="${2:-$(cfg_get bins "$DEFAULT_BINS")}" 
+  local phy="${3:-$(resolve_phy)}"
+  local max_runtime max_bytes seconds
+  max_runtime="$(cfg_get max_runtime_seconds "$DEFAULT_MAX_RUNTIME")"
+  max_bytes="$(cfg_get max_capture_bytes "$DEFAULT_MAX_CAPTURE_BYTES")"
+
+  [ "$req_seconds" -gt 0 ] 2>/dev/null || req_seconds=1
+  [ "$max_runtime" -gt 0 ] 2>/dev/null || max_runtime="$DEFAULT_MAX_RUNTIME"
+  [ "$max_bytes" -gt 1023 ] 2>/dev/null || max_bytes="$DEFAULT_MAX_CAPTURE_BYTES"
+
+  seconds="$req_seconds"
+  [ "$seconds" -gt "$max_runtime" ] && seconds="$max_runtime"
+
+  ( capture_worker "$phy" "$seconds" "$req_bins" "$max_bytes" ) &
+  local pid=$!
+  echo "$pid" > "$PID_FILE"
+  echo $(( $(now_s) + seconds )) > "$END_FILE"
+
+  echo "{\"ok\":true,\"running\":true,\"pid\":$pid,\"seconds\":$seconds,\"bins\":$req_bins,\"phy\":\"$phy\",\"max_capture_bytes\":$max_bytes}"
+}
+
+stop_cmd() {
+  local phy
+  phy="$(resolve_phy)"
+  if running_pid; then
+    local pid
+    pid="$(cat "$PID_FILE")"
+    kill "$pid" 2>/dev/null || true
+    sleep 1
+    kill -9 "$pid" 2>/dev/null || true
+  fi
+  scan_disable "$phy"
+  rm -f "$PID_FILE" "$END_FILE"
+  echo '{"ok":true,"running":false}'
+}
+
+snapshot_cmd() {
+  local phy="$(resolve_phy)" snap_bytes parser
+  parser="/usr/lib/rfeye/rfeye-spectral-parse"
+  snap_bytes="$(cfg_get snapshot_bytes "$DEFAULT_SNAPSHOT_BYTES")"
+  [ "$snap_bytes" -gt 0 ] 2>/dev/null || snap_bytes="$DEFAULT_SNAPSHOT_BYTES"
+  [ "$snap_bytes" -gt "$DEFAULT_MAX_CAPTURE_BYTES" ] && snap_bytes="$DEFAULT_MAX_CAPTURE_BYTES"
+
+  local ath scan0 ctl tmp
+  ath="$(ath_dir "$phy")"
+  scan0="$ath/spectral_scan0"
+  ctl="$ath/spectral_scan_ctl"
+  tmp="$STATE_DIR/snapshot.bin"
+
+  if [ ! -f "$scan0" ] || [ ! -x "$parser" ]; then
+    echo "{\"ok\":false,\"error\":\"unsupported\",\"phy\":\"$phy\"}"
+    return 1
+  fi
+
+  [ -f "$ctl" ] && echo background > "$ctl" 2>/dev/null || true
+  [ -f "$ctl" ] && echo trigger > "$ctl" 2>/dev/null || true
+  dd if="$scan0" of="$tmp" bs=1 count="$snap_bytes" 2>/dev/null || true
+  [ -f "$ctl" ] && echo disable > "$ctl" 2>/dev/null || true
+
+  local frame
+  frame="$($parser --input "$tmp" --phy "$phy" --limit 1 --bins 128 2>/dev/null | head -n1)"
+  rm -f "$tmp"
+
+  if [ -z "$frame" ]; then
+    echo "{\"ok\":false,\"error\":\"no frame\",\"phy\":\"$phy\"}"
+    return 1
+  fi
+
+  echo "{\"ok\":true,\"frame\":$frame}"
+}
+
+daemon_cmd() {
+  # minimal guard daemon for procd: enforce runtime expiry and fail-safe disable
+  while true; do
+    if running_pid && [ -f "$END_FILE" ]; then
+      local now end
+      now="$(now_s)"
+      end="$(cat "$END_FILE" 2>/dev/null || echo 0)"
+      if [ "$end" -gt 0 ] && [ "$now" -ge "$end" ]; then
+        stop_cmd >/dev/null 2>&1 || true
+      fi
+    fi
+    sleep 2
+  done
+}
+
+cmd="${1:-status}"
+shift || true
+
+case "$cmd" in
+  status) status_cmd ;;
+  start) start_cmd "$@" ;;
+  stop) stop_cmd ;;
+  snapshot) snapshot_cmd ;;
+  daemon) daemon_cmd ;;
+  *)
+    echo "Usage: $0 {status|start [seconds bins phy]|stop|snapshot|daemon}" >&2
+    exit 2
+    ;;
+esac
+
