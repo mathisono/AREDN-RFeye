@@ -17,6 +17,7 @@ PHY_ARG="${QUERY_STRING#*phy=}"
 [ "$PHY_ARG" = "$QUERY_STRING" ] && PHY_ARG="" || PHY_ARG="${PHY_ARG%%&*}"
 
 AGENT="/usr/sbin/rfeye-agent"
+SURVEY="/usr/sbin/rfeye-survey"
 
 case "$ACTION" in
   status)
@@ -30,6 +31,12 @@ case "$ACTION" in
     ;;
   snapshot)
     exec "$AGENT" snapshot
+    ;;
+  survey)
+    exec "$SURVEY" survey "${PHY_ARG:-}"
+    ;;
+  utilization|survey_delta)
+    exec "$SURVEY" utilization "${PHY_ARG:-}"
     ;;
   *)
     echo '{"ok":false,"error":"unknown action"}'
