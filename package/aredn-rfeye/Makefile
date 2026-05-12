@@ -29,7 +29,22 @@ endef
 define Package/aredn-rfeye/install
 	$(INSTALL_DIR) $(1)/usr/lib/rfeye
 	$(INSTALL_BIN) $(PKG_BUILD_DIR)/rfeye-spectral-parse $(1)/usr/lib/rfeye/rfeye-spectral-parse
-	$(CP) ./files/* $(1)/
+	[ ! -f ./files/usr/lib/rfeye/rfeye-probe.sh ] || $(INSTALL_BIN) ./files/usr/lib/rfeye/rfeye-probe.sh $(1)/usr/lib/rfeye/rfeye-probe.sh
+
+	$(INSTALL_DIR) $(1)/usr/sbin
+	$(INSTALL_BIN) ./files/usr/sbin/rfeye-agent $(1)/usr/sbin/rfeye-agent
+	$(INSTALL_BIN) ./files/usr/sbin/rfeye-survey $(1)/usr/sbin/rfeye-survey
+
+	$(INSTALL_DIR) $(1)/etc/init.d
+	$(INSTALL_BIN) ./files/etc/init.d/rfeye $(1)/etc/init.d/rfeye
+
+	$(INSTALL_DIR) $(1)/etc/config
+	$(INSTALL_CONF) ./files/etc/config/rfeye $(1)/etc/config/rfeye
+
+	$(INSTALL_DIR) $(1)/www/cgi-bin/apps/rfeye/data
+	$(INSTALL_BIN) ./files/www/cgi-bin/apps/rfeye/data/agent.sh $(1)/www/cgi-bin/apps/rfeye/data/agent.sh
+
+	$(CP) ./files/www $(1)/
 endef
 
 $(eval $(call BuildPackage,aredn-rfeye))
