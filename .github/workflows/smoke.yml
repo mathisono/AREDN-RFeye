@@ -1,0 +1,37 @@
+name: smoke
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  parser-smoke:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build parser
+        run: |
+          mkdir -p build
+          cc -O2 -Wall -Wextra \
+            -o build/rfeye-spectral-parse \
+            src/rfeye_spectral_parse.c
+
+      - name: Generate fixture
+        run: |
+          python3 scripts/make-test-fixture.py \
+            --out fixtures/sample-ath10k.bin \
+            --bins 32
+
+      - name: Parse fixture
+        run: |
+          build/rfeye-spectral-parse \
+            --input fixtures/sample-ath10k.bin \
+            --phy phy0 \
+            --limit 1 \
+            --bins 32 | tee /tmp/rfeye-frame.json
+
+          grep -q '"phy":"phy0"' /tmp/rfeye-frame.json
+          grep -q '"freq1_mhz":5745' /tmp/rfeye-frame.json
+          grep -q '"bins":' /tmp/rfeye-frame.json
