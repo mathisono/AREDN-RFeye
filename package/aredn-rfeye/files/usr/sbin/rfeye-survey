@@ -1,0 +1,157 @@
+#!/bin/sh
+# rfeye-survey: survey counter and utilization helper for AREDN RFeye
+
+set -u
+
+DEFAULT_PHY="phy0"
+
+json_escape() {
+	printf '%s' "$1" | sed 's/\\/\\\\/g; s/"/\\"/g'
+}
+
+cfg_get() {
+	local key="$1" default="$2"
+	if command -v uci >/dev/null 2>&1; then
+		local v
+		v="$(uci -q get rfeye.main.$key 2>/dev/null || true)"
+		[ -n "$v" ] && { echo "$v"; return 0; }
+	fi
+	echo "$default"
+}
+
+resolve_phy() {
+	local phy
+	phy="$(cfg_get phy "$DEFAULT_PHY")"
+	if [ "$phy" = "auto" ] || [ -z "$phy" ]; then
+		for p in /sys/kernel/debug/ieee80211/phy*; do
+			[ -d "$p" ] || continue
+			basename "$p"
+			return 0
+		done
+		echo "$DEFAULT_PHY"
+		return 0
+	fi
+	echo "$phy"
+}
+
+iface_for_phy() {
+	local phy="$1" n
+	for n in /sys/class/ieee80211/$phy/device/net/*; do
+		[ -e "$n" ] || continue
+		basename "$n"
+		return 0
+	done
+	return 1
+}
+
+survey_values() {
+	# Output: active busy tx rx noise
+	local phy="$1" iface survey active busy tx rx noise
+	iface="$(iface_for_phy "$phy" 2>/dev/null || true)"
+	[ -n "$iface" ] || return 1
+	command -v iw >/dev/null 2>&1 || return 1
+	survey="$(iw dev "$iface" survey dump 2>/dev/null || true)"
+	[ -n "$survey" ] || return 1
+
+	active="$(printf '%s\n' "$survey" | awk -F': ' '/channel active time/ {gsub(/ ms/,"",$2); print int($2); exit}')"
+	busy="$(printf '%s\n' "$survey" | awk -F': ' '/channel busy time/ {gsub(/ ms/,"",$2); print int($2); exit}')"
+	tx="$(printf '%s\n' "$survey" | awk -F': ' '/channel transmit time/ {gsub(/ ms/,"",$2); print int($2); exit}')"
+	rx="$(printf '%s\n' "$survey" | awk -F': ' '/channel receive time/ {gsub(/ ms/,"",$2); print int($2); exit}')"
+	noise="$(printf '%s\n' "$survey" | awk -F': ' '/noise/ {gsub(/ dBm/,"",$2); print int($2); exit}')"
+
+	[ -n "$active" ] || active=0
+	[ -n "$busy" ] || busy=0
+	[ -n "$tx" ] || tx=0
+	[ -n "$rx" ] || rx=0
+	[ -n "$noise" ] || noise=0
+
+	echo "$active $busy $tx $rx $noise"
+}
+
+survey_cmd() {
+	local phy iface vals active busy tx rx noise
+	phy="${1:-$(resolve_phy)}"
+	iface="$(iface_for_phy "$phy" 2>/dev/null || true)"
+	if [ -z "$iface" ]; then
+		echo "{\"ok\":false,\"error\":\"interface unavailable\",\"phy\":\"$(json_escape "$phy")\"}"
+		return 1
+	fi
+
+	vals="$(survey_values "$phy" || true)"
+	if [ -z "$vals" ]; then
+		echo "{\"ok\":false,\"error\":\"survey counters unavailable\",\"phy\":\"$(json_escape "$phy")\",\"iface\":\"$(json_escape "$iface")\"}"
+		return 1
+	fi
+
+	set -- $vals
+	active="$1"; busy="$2"; tx="$3"; rx="$4"; noise="$5"
+
+	cat <<JSON
+{
+  "ok": true,
+  "phy": "$(json_escape "$phy")",
+  "iface": "$(json_escape "$iface")",
+  "survey": {
+    "active_ms": $active,
+    "busy_ms": $busy,
+    "tx_ms": $tx,
+    "rx_ms": $rx,
+    "noise_dbm": $noise
+  }
+}
+JSON
+}
+
+utilization_cmd() {
+	local phy iface vals1 vals2 a1 b1 t1 r1 n1 a2 b2 t2 r2 n2
+	phy="${1:-$(resolve_phy)}"
+	iface="$(iface_for_phy "$phy" 2>/dev/null || true)"
+	if [ -z "$iface" ]; then
+		echo "{\"ok\":false,\"error\":\"interface unavailable\",\"phy\":\"$(json_escape "$phy")\"}"
+		return 1
+	fi
+
+	vals1="$(survey_values "$phy" || true)"
+	sleep 1
+	vals2="$(survey_values "$phy" || true)"
+	if [ -z "$vals1" ] || [ -z "$vals2" ]; then
+		echo "{\"ok\":false,\"error\":\"survey counters unavailable\",\"phy\":\"$(json_escape "$phy")\",\"iface\":\"$(json_escape "$iface")\"}"
+		return 1
+	fi
+
+	set -- $vals1; a1="$1"; b1="$2"; t1="$3"; r1="$4"; n1="$5"
+	set -- $vals2; a2="$1"; b2="$2"; t2="$3"; r2="$4"; n2="$5"
+
+	awk -v phy="$phy" -v iface="$iface" \
+		-v a1="$a1" -v b1="$b1" -v t1="$t1" -v r1="$r1" \
+		-v a2="$a2" -v b2="$b2" -v t2="$t2" -v r2="$r2" -v n2="$n2" '
+	function esc(s) { gsub(/\\/,"\\\\",s); gsub(/"/,"\\\"",s); return s }
+	BEGIN {
+		da=a2-a1; db=b2-b1; dt=t2-t1; dr=r2-r1;
+		if (da <= 0) {
+			printf("{\"ok\":false,\"error\":\"invalid survey delta\",\"phy\":\"%s\",\"iface\":\"%s\"}\n", esc(phy), esc(iface));
+			exit 1;
+		}
+		ext=db-dt-dr; if (ext < 0) ext=0;
+		printf("{\n");
+		printf("  \"ok\": true,\n");
+		printf("  \"phy\": \"%s\",\n", esc(phy));
+		printf("  \"iface\": \"%s\",\n", esc(iface));
+		printf("  \"window_seconds\": 1,\n");
+		printf("  \"delta_ms\": {\"active\": %d, \"busy\": %d, \"tx\": %d, \"rx\": %d},\n", da, db, dt, dr);
+		printf("  \"utilization\": {\"total\": %.4f, \"tx\": %.4f, \"rx\": %.4f, \"external_busy\": %.4f},\n", db/da, dt/da, dr/da, ext/da);
+		printf("  \"noise_dbm\": %d\n", n2);
+		printf("}\n");
+	}'
+}
+
+cmd="${1:-survey}"
+shift || true
+case "$cmd" in
+	survey) survey_cmd "${1:-}" ;;
+	utilization|survey_delta) utilization_cmd "${1:-}" ;;
+	*)
+		echo "Usage: $0 {survey|utilization} [phy]" >&2
+		exit 2
+		;;
+esac
