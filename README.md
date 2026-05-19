@@ -1,119 +1,126 @@
 # AREDN RFeye
 
-AREDN RFeye is an AREDN-native RF spectrum visibility tool for ath10k-based 802.11ac nodes. The goal is to provide an AirView-like experience that fits inside an AREDN node, uses AREDN app conventions, and relies on OpenWrt `PACKAGE_ATH_SPECTRAL` where available.
+AREDN RFeye is an AREDN-native RF spectrum visibility tool for ath10k-based 802.11ac nodes. The goal is to provide an AirView-like test view inside an AREDN node while keeping heavier analysis, replay, and classifiers on a Linux workstation.
 
 ## Current status
 
-This scaffold now covers:
+The node package now includes:
 
-- Milestone 1 support probe (`rfeye-probe`) for debugfs/spectral/survey checks.
-- Milestone 2 parser starter (`rfeye-spectral-parse`) for ath10k TLV samples.
-- Admin CGI snapshot endpoint wired to parser output.
-- First `rfeye-agent` skeleton with strict capture time/memory limits.
+- `rfeye-agent` for safe status/start/stop/snapshot capture control.
+- `rfeye-survey` for survey counters and utilization estimates.
+- `rfeye-spectral-parse` for ath10k TLV-to-JSON FFT frames.
+- A lightweight AREDN app GUI at `/cgi-bin/apps/rfeye/user`.
+- A CGI JSON bridge at `/cgi-bin/apps/rfeye/data/agent.sh`.
+- Parser smoke tests and GitHub Actions smoke workflow.
 
-Architecture baseline (node + Linux split):
+## Safety rules
 
-- `docs/ARCHITECTURE.md`
+- Current-channel/background scan only.
+- No automatic channel hopping.
+- No continuous flash writes.
+- Captures stay in `/tmp`.
+- Capture runtime and byte count are capped.
+- Unsupported hardware must return clear JSON errors.
 
-## Goals
-
-- Fit inside an AREDN firmware image as a small OpenWrt package.
-- Appear in AREDN Apps menu under `/www/cgi-bin/apps/rfeye/...`.
-- Avoid continuous flash writes (keep high-rate data in RAM/tmpfs).
-- Expose live FFT/waterfall/utilization views in lightweight UI.
-
-## Probe script
-
-Run on an AREDN/OpenWrt node:
+## Local parser test
 
 ```sh
-sh /usr/lib/rfeye/rfeye-probe.sh
+scripts/test-parser-smoke.sh
 ```
 
-Optional short sample capture from `spectral_scan0`:
+Expected:
+
+```text
+RFeye parser smoke test passed
+```
+
+## Build an OpenWrt/AREDN `.ipk`
+
+Copy the package into an AREDN/OpenWrt build tree:
 
 ```sh
-sh /usr/lib/rfeye/rfeye-probe.sh --capture-bytes 4096 --capture-dir /tmp
+RFeye=$HOME/src/AREDN-RFeye
+AREDN=$HOME/src/aredn
+
+rsync -av --delete "$RFeye/package/aredn-rfeye/" \
+  "$AREDN/package/aredn-rfeye/"
 ```
 
-The probe reports:
-
-- debugfs availability
-- phy list
-- ath10k spectral file presence
-- `iw dev <iface> survey dump` field availability (`active`, `busy`, `tx`, `rx`, `noise`)
-
-## Parser (Milestone 2)
-
-Parser source:
-
-- `src/rfeye_spectral_parse.c`
-
-Build locally:
+Build:
 
 ```sh
-mkdir -p build
-cc -O2 -Wall -Wextra -o build/rfeye-spectral-parse src/rfeye_spectral_parse.c
+cd "$AREDN"
+make package/aredn-rfeye/clean V=s
+make package/aredn-rfeye/compile V=s
+find bin -name 'aredn-rfeye*.ipk' -print
 ```
 
-Parse a captured ath10k sample stream:
+## Install on a bench node
 
 ```sh
-./build/rfeye-spectral-parse --input /tmp/rfeye-sample-phy0.bin --phy phy0 --limit 10 --bins 64
+scp bin/packages/*/*/aredn-rfeye_*.ipk root@localnode.local.mesh:/tmp/
+ssh root@localnode.local.mesh
+opkg install /tmp/aredn-rfeye_*.ipk
 ```
 
-Example output (one compact JSON frame per line):
-
-```json
-{"phy":"phy0","freq1_mhz":5745,"freq2_mhz":0,"width_mhz":80,"noise":-96,"rssi":42,"max_index":115,"max_magnitude":900,"tsf":123456789,"bins":[12,13,15,18]}
-```
-
-Fixture + replay helpers:
+Manual checks before enabling service:
 
 ```sh
-python3 scripts/make-test-fixture.py --out fixtures/sample-ath10k.bin --bins 32
-scripts/rfeye-replay.sh fixtures/sample-ath10k.bin --phy phy0
+/usr/sbin/rfeye-agent status
+/usr/sbin/rfeye-survey survey
+/usr/sbin/rfeye-survey utilization
+/usr/sbin/rfeye-agent snapshot
 ```
 
-## rfeye-agent skeleton (status/start/stop/snapshot)
-
-Node command:
-
-- `/usr/sbin/rfeye-agent status`
-- `/usr/sbin/rfeye-agent start [seconds bins phy]`
-- `/usr/sbin/rfeye-agent stop`
-- `/usr/sbin/rfeye-agent snapshot`
-
-Safety/limits enforced by config (`/etc/config/rfeye`):
-
-- `max_runtime_seconds` (hard cap for captures)
-- `max_capture_bytes` (hard cap for capture memory)
-- `snapshot_bytes` (hard cap for snapshot reads)
-
-JSON CGI bridge endpoint:
-
-- `/www/cgi-bin/apps/rfeye/data/agent.sh?action=status|start|stop|snapshot`
-
-## Admin CGI snapshot endpoint
-
-Installed path:
-
-- `/www/cgi-bin/apps/rfeye/admin/snapshot.sh`
-
-It captures a short sample from `spectral_scan0`, parses one frame with
-`/usr/lib/rfeye/rfeye-spectral-parse`, and returns:
-
-```json
-{"ok":true,"frame":{...}}
-```
-
-Query args:
-
-- `phy` (default `phy0`)
-- `bins` (default `64`)
-
-Example:
+Optional service enable:
 
 ```sh
-curl "http://<node>/cgi-bin/apps/rfeye/admin/snapshot.sh?phy=phy0&bins=64"
+uci set rfeye.main.enabled='1'
+uci commit rfeye
+/etc/init.d/rfeye enable
+/etc/init.d/rfeye start
 ```
+
+## Test the node GUI
+
+Open:
+
+```text
+http://localnode.local.mesh/cgi-bin/apps/rfeye/user
+```
+
+The GUI provides:
+
+- Start/stop data pull.
+- Test duration selector.
+- PHY and bin controls.
+- Current FFT canvas.
+- Utilization and external busy estimates.
+- Raw JSON output for debugging.
+
+## CGI/API tests
+
+```sh
+curl 'http://localnode.local.mesh/cgi-bin/apps/rfeye/data/agent.sh?action=status'
+curl 'http://localnode.local.mesh/cgi-bin/apps/rfeye/data/agent.sh?action=survey'
+curl 'http://localnode.local.mesh/cgi-bin/apps/rfeye/data/agent.sh?action=utilization'
+curl 'http://localnode.local.mesh/cgi-bin/apps/rfeye/data/agent.sh?action=snapshot'
+curl 'http://localnode.local.mesh/cgi-bin/apps/rfeye/data/agent.sh?action=start&seconds=5&bins=128&phy=phy0'
+curl 'http://localnode.local.mesh/cgi-bin/apps/rfeye/data/agent.sh?action=stop'
+```
+
+## Commit built package artifact
+
+For early node testing only, OpenClaw may commit a built `.ipk` under:
+
+```text
+artifacts/ipk/
+```
+
+Use a filename that includes package version, architecture, and build date where possible. Do not commit full OpenWrt build trees or temporary build output.
+
+More detailed instructions are in:
+
+- `docs/BUILD_AND_NODE_TEST.md`
+- `docs/OPENCLAW_IPK_TASK.md`
+- `docs/NODE_TEST_REPORT_TEMPLATE.md`
