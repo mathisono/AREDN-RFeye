@@ -1,0 +1,222 @@
+#!/bin/sh
+# AREDN RFeye lightweight node GUI
+
+echo "Content-Type: text/html"
+echo "Cache-Control: no-store"
+echo
+
+cat <<'HTML'
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>AREDN RFeye</title>
+  <link rel="stylesheet" href="/a/css/theme.css">
+  <link rel="stylesheet" href="/a/css/user.css">
+  <link rel="stylesheet" href="/a/css/mobile.css">
+  <style>
+    body { margin: 1rem; font-family: system-ui, sans-serif; }
+    .rfeye-wrap { max-width: 980px; margin: 0 auto; }
+    .rfeye-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: .75rem; }
+    .rfeye-card { border: 1px solid rgba(127,127,127,.35); border-radius: .6rem; padding: .75rem; background: rgba(127,127,127,.06); }
+    .rfeye-row { display: flex; flex-wrap: wrap; gap: .5rem; align-items: end; margin: .5rem 0; }
+    label { display: grid; gap: .2rem; font-size: .9rem; }
+    input, select, button { font: inherit; padding: .35rem .5rem; }
+    button { cursor: pointer; }
+    canvas { width: 100%; height: 260px; border: 1px solid rgba(127,127,127,.35); border-radius: .5rem; background: #05070a; }
+    pre { overflow: auto; max-height: 14rem; padding: .5rem; background: rgba(0,0,0,.12); border-radius: .4rem; }
+    .ok { color: #15803d; font-weight: 700; }
+    .bad { color: #b91c1c; font-weight: 700; }
+    .muted { opacity: .75; }
+    .warn { border-left: .3rem solid #f59e0b; padding-left: .6rem; }
+  </style>
+</head>
+<body>
+<div class="rfeye-wrap">
+  <h2>AREDN RFeye</h2>
+  <p class="muted">Node-side FFT test view. Current-channel only; not a calibrated spectrum analyzer.</p>
+
+  <div class="rfeye-card warn">
+    <b>Testing mode:</b> captures are time-limited and stored in <code>/tmp</code>. Do not enable channel hopping on a production mesh node.
+  </div>
+
+  <div class="rfeye-grid">
+    <div class="rfeye-card">
+      <h3>Controls</h3>
+      <div class="rfeye-row">
+        <label>PHY
+          <input id="phy" value="phy0" autocomplete="off">
+        </label>
+        <label>Bins
+          <select id="bins">
+            <option>64</option>
+            <option selected>128</option>
+            <option>256</option>
+          </select>
+        </label>
+        <label>Test length, seconds
+          <input id="seconds" type="number" min="1" max="20" value="10">
+        </label>
+      </div>
+      <div class="rfeye-row">
+        <button id="start">Start data pull</button>
+        <button id="stop">Stop</button>
+        <button id="snapshot">One snapshot</button>
+      </div>
+      <div>Status: <span id="runstate" class="muted">idle</span></div>
+      <div>Frames drawn: <span id="frames">0</span></div>
+    </div>
+
+    <div class="rfeye-card">
+      <h3>Channel utilization</h3>
+      <div>Total: <b id="u-total">--</b></div>
+      <div>TX: <b id="u-tx">--</b></div>
+      <div>RX: <b id="u-rx">--</b></div>
+      <div>External busy: <b id="u-ext">--</b></div>
+      <div>Noise: <b id="noise">--</b></div>
+    </div>
+
+    <div class="rfeye-card">
+      <h3>Snapshot info</h3>
+      <div>Freq: <b id="freq">--</b></div>
+      <div>Width: <b id="width">--</b></div>
+      <div>RSSI: <b id="rssi">--</b></div>
+      <div>Max bin: <b id="maxbin">--</b></div>
+    </div>
+  </div>
+
+  <h3>Current FFT</h3>
+  <canvas id="fft" width="960" height="260"></canvas>
+
+  <h3>Raw JSON</h3>
+  <pre id="raw">Waiting for data...</pre>
+</div>
+
+<script>
+(function () {
+  const api = '/cgi-bin/apps/rfeye/data/agent.sh';
+  const canvas = document.getElementById('fft');
+  const ctx = canvas.getContext('2d');
+  const raw = document.getElementById('raw');
+  const state = document.getElementById('runstate');
+  const framesEl = document.getElementById('frames');
+  let timer = null;
+  let stopAt = 0;
+  let frames = 0;
+
+  function qs(action) {
+    const phy = encodeURIComponent(document.getElementById('phy').value || 'phy0');
+    const bins = encodeURIComponent(document.getElementById('bins').value || '128');
+    const seconds = encodeURIComponent(document.getElementById('seconds').value || '10');
+    return `${api}?action=${action}&phy=${phy}&bins=${bins}&seconds=${seconds}`;
+  }
+
+  function setState(txt, good) {
+    state.textContent = txt;
+    state.className = good === true ? 'ok' : good === false ? 'bad' : 'muted';
+  }
+
+  function pct(v) {
+    if (typeof v !== 'number' || !isFinite(v)) return '--';
+    return `${Math.round(v * 100)}%`;
+  }
+
+  async function getJson(url) {
+    const r = await fetch(url, { cache: 'no-store' });
+    const t = await r.text();
+    try { return JSON.parse(t); }
+    catch (e) { return { ok: false, error: 'invalid json', body: t }; }
+  }
+
+  function drawFFT(bins) {
+    const w = canvas.width;
+    const h = canvas.height;
+    ctx.clearRect(0, 0, w, h);
+    ctx.fillStyle = '#05070a';
+    ctx.fillRect(0, 0, w, h);
+    ctx.strokeStyle = '#1f2937';
+    ctx.lineWidth = 1;
+    for (let i = 1; i < 5; i++) {
+      const y = Math.round((h / 5) * i);
+      ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(w, y); ctx.stroke();
+    }
+    if (!bins || !bins.length) return;
+    let max = 1;
+    for (const v of bins) if (v > max) max = v;
+    ctx.strokeStyle = '#22d3ee';
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    bins.forEach((v, i) => {
+      const x = bins.length === 1 ? 0 : (i / (bins.length - 1)) * w;
+      const y = h - ((v / max) * (h - 18)) - 8;
+      if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+    });
+    ctx.stroke();
+  }
+
+  function updateFrame(j) {
+    raw.textContent = JSON.stringify(j, null, 2);
+    if (!j.ok || !j.frame) {
+      setState(j.error || 'no frame', false);
+      return;
+    }
+    const f = j.frame;
+    drawFFT(f.bins || []);
+    frames += 1;
+    framesEl.textContent = String(frames);
+    document.getElementById('freq').textContent = f.freq1_mhz ? `${f.freq1_mhz} MHz` : '--';
+    document.getElementById('width').textContent = f.width_mhz ? `${f.width_mhz} MHz` : '--';
+    document.getElementById('rssi').textContent = f.rssi ?? '--';
+    document.getElementById('maxbin').textContent = f.max_index ?? '--';
+    setState('receiving snapshot frames', true);
+  }
+
+  async function pollSnapshot() {
+    const j = await getJson(qs('snapshot'));
+    updateFrame(j);
+    if (timer && Date.now() > stopAt) await stopPull();
+  }
+
+  async function updateUtilization() {
+    const j = await getJson(qs('utilization'));
+    if (!j.ok || !j.utilization) return;
+    document.getElementById('u-total').textContent = pct(j.utilization.total);
+    document.getElementById('u-tx').textContent = pct(j.utilization.tx);
+    document.getElementById('u-rx').textContent = pct(j.utilization.rx);
+    document.getElementById('u-ext').textContent = pct(j.utilization.external_busy);
+    document.getElementById('noise').textContent = Number.isFinite(j.noise_dbm) ? `${j.noise_dbm} dBm` : '--';
+  }
+
+  async function startPull() {
+    const seconds = Math.max(1, Math.min(20, parseInt(document.getElementById('seconds').value || '10', 10)));
+    document.getElementById('seconds').value = seconds;
+    frames = 0;
+    framesEl.textContent = '0';
+    setState('starting...', null);
+    raw.textContent = JSON.stringify(await getJson(qs('start')), null, 2);
+    stopAt = Date.now() + seconds * 1000;
+    if (timer) clearInterval(timer);
+    timer = setInterval(pollSnapshot, 1200);
+    pollSnapshot();
+    updateUtilization();
+  }
+
+  async function stopPull() {
+    if (timer) clearInterval(timer);
+    timer = null;
+    raw.textContent = JSON.stringify(await getJson(qs('stop')), null, 2);
+    setState('stopped', null);
+  }
+
+  document.getElementById('start').addEventListener('click', startPull);
+  document.getElementById('stop').addEventListener('click', stopPull);
+  document.getElementById('snapshot').addEventListener('click', pollSnapshot);
+  setInterval(updateUtilization, 6000);
+  updateUtilization();
+  drawFFT([]);
+})();
+</script>
+</body>
+</html>
+HTML
