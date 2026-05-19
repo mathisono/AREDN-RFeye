@@ -47,7 +47,7 @@ define Package/aredn-rfeye/install
 	$(INSTALL_DIR) $(1)/www/cgi-bin/apps/rfeye/data
 	$(INSTALL_BIN) ./files/www/cgi-bin/apps/rfeye/data/agent.sh $(1)/www/cgi-bin/apps/rfeye/data/agent.sh
 
-	$(CP) ./files/www/apps $(1)/www/
+	[ ! -d ./files/www/apps ] || $(CP) ./files/www/apps $(1)/www/
 endef
 
 $(eval $(call BuildPackage,aredn-rfeye))
