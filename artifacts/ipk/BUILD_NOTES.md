@@ -10,6 +10,7 @@
 - Package size: 10441 bytes
 - SHA256: f775d31bf0589ad738e2d090b89b39d594bf183dd9970ccf9c488a8f863a8cac
 - Parser smoke test: passed via `bash scripts/test-parser-smoke.sh`
+- Node install test: not performed; no bench node was available in this build environment.
 - Build commands:
   - `rsync -a --delete "/home/bill/src/AREDN-RFeye/package/aredn-rfeye/" "/home/bill/src/build-sdk/openwrt-sdk-ath79-generic/package/aredn-rfeye/"`
   - `make package/aredn-rfeye/clean V=s`
