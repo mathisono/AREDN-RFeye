@@ -10,6 +10,10 @@ The first testable OpenWrt/AREDN package artifact is committed under:
 artifacts/ipk/aredn-rfeye_0.1.0-r1_mips_24kc.ipk
 ```
 
+Direct download link:
+
+- [aredn-rfeye_0.1.0-r1_mips_24kc.ipk](../artifacts/ipk/aredn-rfeye_0.1.0-r1_mips_24kc.ipk)
+
 Build details and warnings are recorded in:
 
 ```text
