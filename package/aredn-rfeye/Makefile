@@ -41,10 +41,13 @@ define Package/aredn-rfeye/install
 	$(INSTALL_DIR) $(1)/etc/config
 	$(INSTALL_CONF) ./files/etc/config/rfeye $(1)/etc/config/rfeye
 
+	$(INSTALL_DIR) $(1)/www/cgi-bin/apps/rfeye
+	$(INSTALL_BIN) ./files/www/cgi-bin/apps/rfeye/user $(1)/www/cgi-bin/apps/rfeye/user
+
 	$(INSTALL_DIR) $(1)/www/cgi-bin/apps/rfeye/data
 	$(INSTALL_BIN) ./files/www/cgi-bin/apps/rfeye/data/agent.sh $(1)/www/cgi-bin/apps/rfeye/data/agent.sh
 
-	$(CP) ./files/www $(1)/
+	$(CP) ./files/www/apps $(1)/www/
 endef
 
 $(eval $(call BuildPackage,aredn-rfeye))
