@@ -74,6 +74,9 @@ case "$ACTION" in
   pipeline_status)
     exec "$AGENT" pipeline_status
     ;;
+  storage_status)
+    exec "$AGENT" storage_status
+    ;;
   pipeline_test)
     exec "$AGENT" pipeline_test "${BINS_ARG:-128}" "${PHY_ARG:-phy0}"
     ;;
@@ -85,6 +88,9 @@ case "$ACTION" in
     ;;
   export_jsonl)
     exec "$AGENT" export_jsonl
+    ;;
+  soak_test)
+    exec "$AGENT" soak_test "${SECONDS_ARG:-300}" "${BINS_ARG:-128}" "${PHY_ARG:-phy0}"
     ;;
   raw_inspect)
     exec "$AGENT" raw_inspect

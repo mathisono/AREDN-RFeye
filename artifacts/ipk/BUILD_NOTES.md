@@ -1,5 +1,30 @@
 # RFeye IPK Build Notes
 
+## r10 build (2026-05-25 UTC)
+
+- Commit: pending local commit
+- Package: `aredn-rfeye 0.1.0-r10`
+- IPK filename: `aredn-rfeye_0.1.0-r10_mips_24kc.ipk`
+- SHA256: `6491834c7a10d572e24327fb4fa5e42656d19812dd3edbeaf4ac5b613f07f11b`
+- Build tree path: `/home/bill/src/build-sdk/openwrt-sdk-ath79-generic`
+- Build commands:
+  - `rsync -a --delete /home/bill/src/AREDN-RFeye/package/aredn-rfeye/ /home/bill/src/build-sdk/openwrt-sdk-ath79-generic/package/aredn-rfeye/`
+  - `rsync -a --delete /home/bill/src/AREDN-RFeye/src/ /home/bill/src/build-sdk/openwrt-sdk-ath79-generic/package/aredn-rfeye/src/`
+  - `LD_LIBRARY_PATH=/home/bill/src/local-gawk/lib make package/aredn-rfeye/clean V=s`
+  - `LD_LIBRARY_PATH=/home/bill/src/local-gawk/lib make package/aredn-rfeye/compile V=s`
+- Validation results before build:
+  - `sh -n package/aredn-rfeye/files/usr/sbin/rfeye-agent` ✅
+  - `sh -n package/aredn-rfeye/files/usr/sbin/rfeye-survey` ✅
+  - `sh -n package/aredn-rfeye/files/www/cgi-bin/apps/rfeye/data/agent.sh` ✅
+  - `sh -n package/aredn-rfeye/files/www/cgi-bin/apps/rfeye/data/download.sh` ✅
+  - `sh -n package/aredn-rfeye/files/www/cgi-bin/apps/rfeye/user` ✅
+  - `cc -Wall -Wextra -o /tmp/rfeye-spectral-parse src/rfeye_spectral_parse.c` ✅
+  - `sh scripts/test-parser-smoke.sh` ✅
+  - `sh scripts/test-hardware-fixture-probe.sh` ✅
+- Build notes:
+  - r10 adds long-run status instrumentation, storage_status, soak_test, 5-minute GUI options, bounded waterfall/ring defaults, and long-run docs.
+- Node retest: PASS through MSE-88 on KJ6DZB-WSB-ACdish5. Manual 5-minute run completed with `frames_captured=80`, `no_frame_count=0`, `waterfall_rows=80`, `/tmp/rfeye` about 772 KiB, final `spectral_scan_ctl=disable`. Final `soak_test 300 128 phy0` returned valid JSON PASS with `frames_captured=100`, `waterfall_rows=100`, `state_dir_bytes=823296`, and final `spectral_scan_ctl=disable`. CGI storage/status and GUI page fields were fetched during the run.
+
 ## r9 build (2026-05-25 UTC)
 
 - Commit: `841640a` (`rfeye: improve live capture cadence and export diagnostics`)

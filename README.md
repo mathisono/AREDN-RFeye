@@ -22,9 +22,10 @@ Implemented so far:
 - Raw capture inspection and parser probe diagnostics
 - Test `.ipk` artifacts under `artifacts/ipk/`
 
-Current main blocker:
+Current milestone:
 
-- On the first tested node, `spectral_scan0` returns nonzero raw data, but the parser currently emits zero valid FFT frames. r6 diagnostics suggest a raw framing/layout mismatch remains.
+- r9 is the first live-waterfall milestone. On KJ6DZB-WSB-ACdish5, a 10-second timed capture produced 8 frames, waterfall rows populated, export/download worked, repeated start/stop did not wedge capture, and `spectral_scan_ctl` ended at `disable`.
+- r10 focuses on 5-minute long-run stability, bounded `/tmp/rfeye` growth, storage/memory/load visibility, and GUI responsiveness.
 
 ## Current field-test limitations
 
@@ -59,7 +60,7 @@ Radio: phy0 / wlan0 / IBSS AREDN-20-v3
 Channel: 141
 Frequency: 5705 MHz
 Width: 20 MHz
-Result: package/UI/API work; parser framing issue remains
+Result: r9 PASS; first live waterfall milestone; r10 targets 5-minute stability
 ```
 
 See the test reports in `docs/` for details.
@@ -121,13 +122,14 @@ Run these before enabling any service:
 /usr/sbin/rfeye-agent parser_probe
 ```
 
-For the current parser issue, the most important commands are:
+For r10 long-run stability, the most important commands are:
 
 ```sh
-/usr/sbin/rfeye-agent raw_capture_test 10 128 phy0
-/usr/sbin/rfeye-agent raw_inspect
-/usr/sbin/rfeye-agent parser_probe
-/usr/lib/rfeye/rfeye-spectral-parse --probe --input /tmp/rfeye/raw-test.tlv
+/usr/sbin/rfeye-agent storage_status
+/usr/sbin/rfeye-agent soak_test 300 128 phy0
+/usr/sbin/rfeye-agent capture_status
+/usr/sbin/rfeye-agent pipeline_status
+/usr/sbin/rfeye-agent heatmap_bundle
 ```
 
 ## Node GUI
@@ -144,7 +146,7 @@ The GUI is structured as:
 2. **Waterfall** — rolling recent-frame heat map
 3. **Ambient** — slower minute-peak heat map
 
-The GUI also displays trusted radio info, capture state, frame counters, no-frame count, and raw JSON diagnostics.
+The GUI also displays trusted radio info, capture state, frame counters, no-frame count, elapsed/remaining time, frame cadence, storage usage, and raw JSON diagnostics. It preserves the last visible products while waiting for the next frame.
 
 ## JSON API
 
@@ -173,6 +175,7 @@ action=utilization
 action=survey_raw
 action=raw_inspect
 action=parser_probe
+action=storage_status
 action=acquisition_debug
 ```
 
@@ -190,13 +193,21 @@ FFT frame frequency metadata is kept for debugging only. Implausible FFT metadat
 
 ## Current development focus
 
-The next development pass should focus on parser/framing refinement:
+r10 targets long-run stability on the first node before adding a second node or classifier work:
 
-- Preserve real hardware captures as fixtures
-- Probe alternate TLV/header variants
-- Add resync scanning
-- Identify whether the raw stream is upstream ath10k TLV, ath10k-ct variation, relayfs padded data, or another layout
-- Make `rfeye-spectral-parse` decode real `spectral_scan0` output from the test node
+- Support 5-minute capture runs with bounded waterfall/ring products.
+- Measure `/tmp/rfeye` usage, latest capture size, memory, and load.
+- Keep GUI polling lightweight and avoid overlapping browser fetches.
+- Keep `--resync` parser path, current channel only, and safe final `spectral_scan_ctl=disable`.
+
+5-minute soak test:
+
+```sh
+/usr/sbin/rfeye-agent reset
+/usr/sbin/rfeye-agent soak_test 300 128 phy0
+```
+
+A successful summary includes nonzero `frames_captured` when spectral data is available, bounded `waterfall_rows`/`ring_frames`, `state_dir_bytes`, and `final_spectral_ctl":"disable"`. See `docs/LONG_RUN_TESTING.md`.
 
 Avoid adding classifier or UI polish until valid frames populate the waveform/waterfall/ambient products.
 

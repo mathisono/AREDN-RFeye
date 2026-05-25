@@ -33,13 +33,13 @@ DEFAULT_PHY="phy0"
 DEFAULT_MODE="background"
 DEFAULT_BINS=128
 DEFAULT_UI_BINS=128
-DEFAULT_MAX_RUNTIME=20
+DEFAULT_MAX_RUNTIME=300
 DEFAULT_MAX_CAPTURE_BYTES=262144
 DEFAULT_SNAPSHOT_BYTES=65536
 DEFAULT_SAMPLE_INTERVAL_MS=1000
-DEFAULT_WATERFALL_ROWS=64
+DEFAULT_WATERFALL_ROWS=300
 DEFAULT_AMBIENT_ROWS=60
-DEFAULT_RING_FRAMES=256
+DEFAULT_RING_FRAMES=512
 DEFAULT_MIN_DBM=-125
 DEFAULT_MAX_DBM=-65
 
@@ -59,6 +59,23 @@ cfg_get() {
 
 now_s() { date +%s; }
 file_size() { [ -f "$1" ] && wc -c < "$1" 2>/dev/null | awk '{print int($1)}' || echo 0; }
+
+state_dir_bytes() {
+  [ -d "$STATE_DIR" ] || { echo 0; return 0; }
+  du -sk "$STATE_DIR" 2>/dev/null | awk '{print int($1)*1024}'
+}
+
+tmp_free_kb() {
+  df -k /tmp 2>/dev/null | awk 'NR==2{print int($4)} END{if(NR<2)print 0}'
+}
+
+free_mem_kb() {
+  awk '/MemAvailable:/ {print int($2); found=1; exit} /MemFree:/ {v=int($2)} END{if(found)exit; print v+0}' /proc/meminfo 2>/dev/null
+}
+
+load_avg() {
+  [ -r /proc/loadavg ] && awk '{print $1}' /proc/loadavg 2>/dev/null || echo 0
+}
 
 resolve_phy() {
   local phy
@@ -316,7 +333,8 @@ session_state() {
 }
 
 capture_metrics_json() {
-  local now started ends frames latest nof bytes interval snap progress age elapsed fpm fps lastdur=0 running="false"
+  local now started ends frames latest nof bytes interval snap progress age elapsed remaining fpm fps lastdur=0 running="false"
+  local wf_rows amb_rows ring_rows cap_bytes state_bytes mem_kb load tmp_kb
   now="$(now_s)"
   started="$(session_num started_at 0)"
   ends="$(session_num ends_at 0)"
@@ -330,6 +348,7 @@ capture_metrics_json() {
   [ "$latest" -gt 0 ] 2>/dev/null && age=$((now - latest)) || age=-1
   [ "$started" -gt 0 ] 2>/dev/null && elapsed=$((now - started)) || elapsed=0
   [ "$elapsed" -gt 0 ] 2>/dev/null || elapsed=0
+  if [ "$ends" -gt "$now" ] 2>/dev/null; then remaining=$((ends - now)); else remaining=0; fi
   if [ "$started" -gt 0 ] 2>/dev/null && [ "$ends" -gt "$started" ] 2>/dev/null; then
     progress=$(( (now - started) * 100 / (ends - started) ))
     [ "$progress" -lt 0 ] && progress=0
@@ -344,8 +363,16 @@ capture_metrics_json() {
     fps="0.00"; fpm="0.0"
   fi
   [ -s "$STATE_DIR/last-cycle-duration-ms" ] && lastdur="$(cat "$STATE_DIR/last-cycle-duration-ms" 2>/dev/null || echo 0)"
+  wf_rows="$(count_json_rows_file "$WATERFALL_FILE")"
+  amb_rows="$(ambient_row_count)"
+  ring_rows="$(count_json_rows_file "$RING_FILE")"
+  cap_bytes="$(file_size "$CAPTURE_FILE")"
+  state_bytes="$(state_dir_bytes)"
+  mem_kb="$(free_mem_kb)"
+  load="$(load_avg)"
+  tmp_kb="$(tmp_free_kb)"
   cat <<JSON
-{"frames_per_second":$fps,"frames_per_minute":$fpm,"last_frame_age_seconds":$age,"capture_progress_percent":$progress,"sample_interval_ms":$interval,"snapshot_bytes":$snap,"parser_mode":"resync","last_cycle_duration_ms":$lastdur,"no_frame_count":$nof,"frames_captured":$frames,"bytes_written":$bytes,"running":$running}
+{"frames_per_second":$fps,"frames_per_minute":$fpm,"frame_rate":$fps,"uptime_seconds":$elapsed,"run_elapsed_seconds":$elapsed,"run_remaining_seconds":$remaining,"last_frame_age_seconds":$age,"capture_progress_percent":$progress,"sample_interval_ms":$interval,"snapshot_bytes":$snap,"parser_mode":"resync","last_cycle_duration_ms":$lastdur,"no_frame_count":$nof,"frames_captured":$frames,"bytes_written":$bytes,"waterfall_rows":$wf_rows,"ambient_rows":$amb_rows,"ring_frames":$ring_rows,"latest_capture_bytes":$cap_bytes,"state_dir_bytes":$state_bytes,"tmp_free_kb":$tmp_kb,"free_mem_kb":$mem_kb,"load_average":$load,"running":$running}
 JSON
 }
 
@@ -487,9 +514,23 @@ ambient_current_json() {
 write_pipeline_status() {
   local raw_bytes="${1:-0}" parser_exit="${2:-0}" frame_present="${3:-false}" frame_bytes="${4:-0}" bins_extracted="${5:-false}" norm_count="${6:-0}" waveform_written="${7:-false}" waveform_bins="${8:-0}" waterfall_rows="${9:-0}"
   shift 9 || true
-  local ambient_rows="${1:-0}" frames_captured="${2:-0}" last_error="${3:-}"
+  local ambient_rows="${1:-0}" frames_captured="${2:-0}" last_error="${3:-}" ring_rows state_bytes cap_bytes mem_kb load tmp_kb elapsed remaining latest age nof fps fpm
+  ring_rows="$(count_json_rows_file "$RING_FILE")"
+  state_bytes="$(state_dir_bytes)"
+  cap_bytes="$(file_size "$CAPTURE_FILE")"
+  mem_kb="$(free_mem_kb)"
+  load="$(load_avg)"
+  tmp_kb="$(tmp_free_kb)"
+  elapsed="$(session_num started_at 0)"; [ "$elapsed" -gt 0 ] 2>/dev/null && elapsed=$(( $(now_s) - elapsed )) || elapsed=0
+  remaining="$(session_num ends_at 0)"; [ "$remaining" -gt "$(now_s)" ] 2>/dev/null && remaining=$(( remaining - $(now_s) )) || remaining=0
+  latest="$(session_num latest_frame_time 0)"; [ "$latest" -gt 0 ] 2>/dev/null && age=$(( $(now_s) - latest )) || age=-1
+  nof="$(session_num no_frame_count 0)"
+  if [ "$elapsed" -gt 0 ] 2>/dev/null; then
+    fps="$(awk -v f="$frames_captured" -v e="$elapsed" 'BEGIN{printf "%.2f", f/e}')"
+    fpm="$(awk -v f="$frames_captured" -v e="$elapsed" 'BEGIN{printf "%.1f", (f*60)/e}')"
+  else fps="0.00"; fpm="0.0"; fi
   cat > "$PIPELINE_STATUS_FILE" <<JSON
-{"ok":true,"last_cycle_time":$(now_s),"raw_bytes":$raw_bytes,"parser_exit":$parser_exit,"parser_frame_present":$frame_present,"parser_frame_bytes":$frame_bytes,"bins_extracted":$bins_extracted,"normalized_bins_count":$norm_count,"waveform_written":$waveform_written,"waveform_bins":$waveform_bins,"waterfall_rows":$waterfall_rows,"ambient_rows":$ambient_rows,"frames_captured":$frames_captured,"last_error":"$(json_escape "$last_error")"}
+{"ok":true,"last_cycle_time":$(now_s),"raw_bytes":$raw_bytes,"parser_exit":$parser_exit,"parser_frame_present":$frame_present,"parser_frame_bytes":$frame_bytes,"bins_extracted":$bins_extracted,"normalized_bins_count":$norm_count,"waveform_written":$waveform_written,"waveform_bins":$waveform_bins,"waterfall_rows":$waterfall_rows,"ambient_rows":$ambient_rows,"ring_frames":$ring_rows,"frames_captured":$frames_captured,"no_frame_count":$nof,"frame_rate":$fps,"frames_per_second":$fps,"frames_per_minute":$fpm,"run_elapsed_seconds":$elapsed,"run_remaining_seconds":$remaining,"last_frame_age_seconds":$age,"latest_capture_bytes":$cap_bytes,"state_dir_bytes":$state_bytes,"tmp_free_kb":$tmp_kb,"free_mem_kb":$mem_kb,"load_average":$load,"last_error":"$(json_escape "$last_error")"}
 JSON
 }
 
@@ -1176,6 +1217,55 @@ acquisition_debug_cmd() {
   acquisition_debug_json
 }
 
+storage_status_json() {
+  local files file first=1
+  printf '{"ok":true,"state_dir":"%s","state_dir_bytes":%s,"tmp_free_kb":%s,"free_mem_kb":%s,"load_average":%s,"files":[' \
+    "$STATE_DIR" "$(state_dir_bytes)" "$(tmp_free_kb)" "$(free_mem_kb)" "$(load_avg)"
+  for file in "$CAPTURE_FILE" "$RAW_TEST_FILE" "$RING_FILE" "$WATERFALL_FILE" "$AMBIENT_FILE" "$BUNDLE_FILE" "$FRAME_FILE" "$FRAME_RAW_FILE" "$PIPELINE_STATUS_FILE" "$STATE_DIR/acquisition_debug.json"; do
+    [ -e "$file" ] || continue
+    [ "$first" -eq 1 ] || printf ','
+    printf '{"path":"%s","bytes":%s}' "$(json_escape "$file")" "$(file_size "$file")"
+    first=0
+  done
+  printf ']}\n'
+}
+
+storage_status_cmd() {
+  cleanup_stale
+  storage_status_json
+}
+
+soak_test_cmd() {
+  local seconds="${1:-300}" bins="${2:-$(cfg_get ui_bins "$DEFAULT_UI_BINS")}" phy="${3:-$(resolve_phy)}" start now end poll status frames nof fps wf amb state_bytes cap_bytes final_ctl pass="true"
+  [ "$seconds" -gt 0 ] 2>/dev/null || seconds=300
+  reset_cmd "$phy" >/dev/null 2>&1 || true
+  start_cmd "$seconds" "$bins" "$phy" >/dev/null || { echo '{"ok":false,"error":"start failed"}'; return 1; }
+  start="$(now_s)"; end=$((start + seconds))
+  while running_pid; do
+    now="$(now_s)"
+    [ "$now" -ge "$end" ] && break
+    sleep 15
+    status="$(capture_status_cmd 2>/dev/null || true)"
+    nof="$(session_num no_frame_count 0)"
+    if [ "$nof" -gt 50 ] 2>/dev/null; then pass="false"; break; fi
+  done
+  stop_cmd >/dev/null 2>&1 || true
+  frames="$(session_num frames_captured 0)"
+  nof="$(session_num no_frame_count 0)"
+  wf="$(count_json_rows_file "$WATERFALL_FILE")"
+  amb="$(ambient_row_count)"
+  state_bytes="$(state_dir_bytes)"
+  cap_bytes="$(file_size "$CAPTURE_FILE")"
+  final_ctl="$(spectral_ctl_value "$phy")"
+  [ "$frames" -gt 0 ] 2>/dev/null || pass="false"
+  [ "$final_ctl" = "disable" ] || pass="false"
+  fps="$(awk -v f="$frames" -v s="$seconds" 'BEGIN{if(s>0)printf "%.2f", f/s; else printf "0.00"}')"
+  cat <<JSON
+{"ok":$pass,"duration_seconds":$seconds,"frames_captured":$frames,"no_frame_count":$nof,"frame_rate":$fps,"latest_capture_bytes":$cap_bytes,"waterfall_rows":$wf,"ambient_rows":$amb,"state_dir_bytes":$state_bytes,"final_spectral_ctl":"$(json_escape "$final_ctl")","result":"$([ "$pass" = true ] && echo PASS || echo FAIL)"}
+JSON
+  [ "$pass" = true ]
+}
+
 export_tlv_info_cmd() {
   cleanup_stale
   local file="$CAPTURE_FILE" exists=false size=0 sha="" mtime=0
@@ -1269,10 +1359,12 @@ case "$cmd" in
   ambient) ambient_cmd ;;
   heatmap_bundle) heatmap_bundle_cmd ;;
   pipeline_status) pipeline_status_cmd ;;
+  storage_status) storage_status_cmd ;;
   pipeline_test) pipeline_test_cmd "$@" ;;
   acquisition_debug) acquisition_debug_cmd ;;
   export_tlv_info) export_tlv_info_cmd ;;
   export_jsonl) export_jsonl_cmd "$@" ;;
+  soak_test) soak_test_cmd "$@" ;;
   raw_inspect) raw_inspect_cmd ;;
   parser_probe) parser_probe_cmd ;;
   raw_capture_test) raw_capture_test_cmd "$@" ;;
@@ -1283,7 +1375,7 @@ case "$cmd" in
   snapshot) snapshot_cmd ;;
   daemon) daemon_cmd ;;
   *)
-    echo '{"ok":false,"error":"usage: rfeye-agent {status|capture_status|radio_info|ui_state|waveform|waterfall|ambient|heatmap_bundle|pipeline_status|pipeline_test [ui_bins phy]|acquisition_debug|export_tlv_info|export_jsonl|raw_inspect|parser_probe|raw_capture_test|reset|start [seconds bins phy]|stop|snapshot|daemon}"}'
+    echo '{"ok":false,"error":"usage: rfeye-agent {status|capture_status|radio_info|ui_state|waveform|waterfall|ambient|heatmap_bundle|pipeline_status|storage_status|pipeline_test [ui_bins phy]|acquisition_debug|export_tlv_info|export_jsonl|soak_test [seconds bins phy]|raw_inspect|parser_probe|raw_capture_test|reset|start [seconds bins phy]|stop|snapshot|daemon}"}'
     exit 2
     ;;
 esac

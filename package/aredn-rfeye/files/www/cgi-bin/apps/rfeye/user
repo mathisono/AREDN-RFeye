@@ -51,7 +51,9 @@ cat <<'HTML'
         <label>Bins
           <select id="bins"><option>64</option><option selected>128</option><option>256</option></select>
         </label>
-        <label>Test length (s) <input id="seconds" type="number" min="1" max="20" value="10"></label>
+        <label>Test length
+          <select id="seconds"><option value="10" selected>10s</option><option value="30">30s</option><option value="60">60s</option><option value="300">5min</option></select>
+        </label>
       </div>
       <div class="rfeye-row">
         <button id="start">Start</button>
@@ -63,9 +65,11 @@ cat <<'HTML'
       <div>No-frame count: <b id="noframes">0</b></div>
       <div>Last frame age: <b id="lastage">--</b></div>
       <div>Frame rate: <b id="framerate">0/min</b></div>
+      <div>Elapsed / remaining: <b id="elapsed">0s / 0s</b></div>
       <div>Capture progress: <b id="progress">0%</b></div>
       <div>Sample interval: <b id="interval">--</b></div>
       <div>Capture bytes: <b id="bytes">0</b></div>
+      <div>Storage used: <b id="storage">0</b></div>
       <div>Parser mode: <b id="parsermode">resync</b></div>
     </div>
 
@@ -83,6 +87,7 @@ cat <<'HTML'
       <div>Waveform range: <b id="wrange">--</b></div>
       <div>Waterfall rows: <b id="wfrows">0</b></div>
       <div>Ambient rows: <b id="amrows">0</b></div>
+      <div>Ring frames: <b id="ringrows">0</b></div>
       <div>Ambient mode: <b id="ammode">minute_peak</b></div>
       <div>Status: <b id="livestatus" class="muted">waiting for next frame</b></div>
     </div>
@@ -109,6 +114,7 @@ cat <<'HTML'
   const waterfall = document.getElementById('waterfall').getContext('2d');
   const ambient = document.getElementById('ambient').getContext('2d');
   let lastWaveform = null, lastWaterfall = null, lastAmbient = null;
+  let pollBusy = false;
 
   function qs(action) {
     const phy = encodeURIComponent(document.getElementById('phy').value || 'phy0');
@@ -207,8 +213,10 @@ cat <<'HTML'
     document.getElementById('bytes').textContent = String(c.bytes_written || m.bytes_written || 0);
     document.getElementById('lastage').textContent = (m.last_frame_age_seconds ?? -1) >= 0 ? `${m.last_frame_age_seconds}s` : '--';
     document.getElementById('framerate').textContent = `${m.frames_per_minute ?? '0.0'}/min (${m.frames_per_second ?? '0.00'}/s)`;
+    document.getElementById('elapsed').textContent = `${m.run_elapsed_seconds ?? m.uptime_seconds ?? 0}s / ${m.run_remaining_seconds ?? 0}s`;
     document.getElementById('progress').textContent = `${m.capture_progress_percent ?? 0}%`;
     document.getElementById('interval').textContent = `${m.sample_interval_ms ?? '--'} ms / ${m.snapshot_bytes ?? '--'} bytes`;
+    document.getElementById('storage').textContent = `${m.state_dir_bytes ?? 0} bytes`;
     document.getElementById('parsermode').textContent = m.parser_mode || 'resync';
     document.getElementById('rfreq').textContent = r.frequency_mhz ? `${r.frequency_mhz} MHz` : '--';
     document.getElementById('rchan').textContent = r.channel || '--';
@@ -218,6 +226,7 @@ cat <<'HTML'
     document.getElementById('wrange').textContent = `${w.x_start_mhz ?? '--'} to ${w.x_end_mhz ?? '--'} MHz`;
     document.getElementById('wfrows').textContent = String((wf.rows || []).length);
     document.getElementById('amrows').textContent = String((am.rows || []).length);
+    document.getElementById('ringrows').textContent = String(m.ring_frames ?? 0);
     document.getElementById('ammode').textContent = am.mode || 'minute_peak';
 
     const hasRows = ((wf.rows || []).length > 0) || ((w.bins || []).length > 0);
@@ -233,12 +242,15 @@ cat <<'HTML'
   }
 
   async function pollBundle() {
-    applyBundle(await getJson(qs('heatmap_bundle')));
+    if (pollBusy) return;
+    pollBusy = true;
+    try { applyBundle(await getJson(qs('heatmap_bundle'))); }
+    finally { pollBusy = false; }
   }
 
   async function startCapture() {
-    const seconds = Math.max(1, Math.min(20, parseInt(document.getElementById('seconds').value || '10', 10)));
-    document.getElementById('seconds').value = seconds;
+    const seconds = Math.max(1, Math.min(300, parseInt(document.getElementById('seconds').value || '10', 10)));
+    document.getElementById('seconds').value = String(seconds);
     raw.textContent = JSON.stringify(await getJson(qs('start')), null, 2);
     setState('starting...', null);
     setTimeout(pollBundle, 800);
@@ -258,7 +270,7 @@ cat <<'HTML'
   document.getElementById('stop').addEventListener('click', stopCapture);
   document.getElementById('reset').addEventListener('click', resetCapture);
 
-  setInterval(pollBundle, 1200);
+  setInterval(pollBundle, 2000);
   pollBundle();
 })();
 </script>
