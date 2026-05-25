@@ -510,11 +510,20 @@ raw_inspect_cmd() {
 
 parser_probe_cmd() {
   cleanup_stale
-  /usr/lib/rfeye/rfeye-spectral-parse --probe --input "$RAW_TEST_FILE"
+  local probe_file resync_stats
+  probe_file="$STATE_DIR/parser-probe.json"
+  resync_stats="$STATE_DIR/parser-resync-stats.json"
+  /usr/lib/rfeye/rfeye-spectral-parse --probe --input "$RAW_TEST_FILE" >"$probe_file" 2>/dev/null || true
+  /usr/lib/rfeye/rfeye-spectral-parse --resync --stats --input "$RAW_TEST_FILE" --phy phy0 --limit 1 --bins 64 >/dev/null 2>"$resync_stats" || true
+  printf '{"ok":true,"probe":'
+  [ -s "$probe_file" ] && cat "$probe_file" || printf '{"ok":false,"error":"probe failed"}'
+  printf ',"resync_stats":'
+  [ -s "$resync_stats" ] && cat "$resync_stats" || printf '{"frames_emitted":0,"skipped_bytes":0}'
+  printf '}\n'
 }
 
 capture_cycle_sequence() {
-  local phy="$1" bins="$2" snap_bytes="$3" parser="$4" raw_out="$5" stats_out="$6" mode="$7" sleep_before="$8" iface ath scan0 tmp stats frame parser_out bytes_read frames_emitted truncated parser_exit out_line
+  local phy="$1" bins="$2" snap_bytes="$3" parser="$4" raw_out="$5" parser_out="$6" stats_out="$7" mode="$8" sleep_before="$9" iface ath scan0 tmp stats frame bytes_read frames_emitted truncated parser_exit out_line
   ath="$(ath_dir "$phy")"
   scan0="$ath/spectral_scan0"
   tmp="$STATE_DIR/cycle.$$.bin"
@@ -538,9 +547,17 @@ capture_cycle_sequence() {
   scan_disable "$phy"
   mv -f "$tmp" "$raw_out" 2>/dev/null || cp -f "$tmp" "$raw_out" 2>/dev/null || true
   if [ -f "$raw_out" ]; then
-    frame="$($parser --input "$raw_out" --phy "$phy" --limit 1 --bins 256 2>/dev/null | head -n1)"
+    frame="$($parser --input "$raw_out" --phy "$phy" --limit 1 --bins "$bins" 2>/dev/null | head -n1)"
     printf '%s\n' "$frame" > "$parser_out"
-    $parser --input "$raw_out" --phy "$phy" --limit 1 --bins 256 --stats >/dev/null 2>"$stats_out"
+    if [ -z "$frame" ]; then
+      frame="$($parser --resync --input "$raw_out" --phy "$phy" --limit 1 --bins "$bins" 2>/dev/null | head -n1)"
+      printf '%s\n' "$frame" > "$parser_out"
+    fi
+    if [ -n "$frame" ]; then
+      $parser --resync --input "$raw_out" --phy "$phy" --limit 1 --bins "$bins" --stats >/dev/null 2>"$stats_out"
+    else
+      $parser --input "$raw_out" --phy "$phy" --limit 1 --bins "$bins" --stats >/dev/null 2>"$stats_out"
+    fi
     parser_exit=$?
     if [ -s "$stats_out" ]; then
       frames_emitted="$(sed -n 's/.*"frames_emitted":\([0-9][0-9]*\).*/\1/p' "$stats_out" | head -n1)"

@@ -26,6 +26,15 @@ Current main blocker:
 
 - On the first tested node, `spectral_scan0` returns nonzero raw data, but the parser currently emits zero valid FFT frames. r6 diagnostics suggest a raw framing/layout mismatch remains.
 
+## Current field-test limitations
+
+- This is still a node test tool, not a calibrated analyzer.
+- ath10k spectral availability and survey counters vary by hardware/driver build.
+- Ambient panel currently uses a lightweight minute-peak rollup, not long-term calibrated noise analytics.
+- Heavy analytics/replay/classification are intentionally deferred to Linux Workbench workflows.
+- Raw framing varies by node/driver build; use `raw_inspect`, `parser_probe`, and `--resync` to identify the active layout (`tlv3_be` and fixed-stride marker formats have both been observed in bench captures).
+- On some timed runs, parser stats may show emitted frames while heatmap rows remain empty; treat this as an acquisition-to-session plumbing issue, not necessarily a raw-format decode failure.
+
 ## Safety model
 
 RFeye is designed to be conservative on a mesh node:
