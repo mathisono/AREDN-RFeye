@@ -22,6 +22,11 @@ FRAME_FILE="$STATE_DIR/latest_frame.json"
 FRAME_RAW_FILE="$STATE_DIR/latest_parser_frame.json"
 BUNDLE_FILE="$STATE_DIR/heatmap_bundle.json"
 LOCK_DIR="$STATE_DIR/capture.lock"
+DEBUG_LAST_CYCLE="$STATE_DIR/debug-last-cycle.tlv"
+DEBUG_LAST_PARSER="$STATE_DIR/debug-last-parser.txt"
+DEBUG_LAST_STATS="$STATE_DIR/debug-last-stats.json"
+RAW_TEST_FILE="$STATE_DIR/raw-test.tlv"
+RAW_TEST_STATS="$STATE_DIR/raw-test-stats.json"
 
 DEFAULT_PHY="phy0"
 DEFAULT_MODE="background"
@@ -29,7 +34,7 @@ DEFAULT_BINS=128
 DEFAULT_UI_BINS=128
 DEFAULT_MAX_RUNTIME=20
 DEFAULT_MAX_CAPTURE_BYTES=262144
-DEFAULT_SNAPSHOT_BYTES=32768
+DEFAULT_SNAPSHOT_BYTES=65536
 DEFAULT_SAMPLE_INTERVAL_MS=2000
 DEFAULT_WATERFALL_ROWS=64
 DEFAULT_AMBIENT_ROWS=60
@@ -383,8 +388,86 @@ ambient_rows_json() {
   json_array_from_lines "$AMBIENT_FILE"
 }
 
+write_debug_artifacts() {
+  local raw_file="$1" parser_out_file="$2" stats_file="$3" bytes="$4" frames="$5" truncated="$6"
+  [ -n "$raw_file" ] && [ -f "$raw_file" ] && cp -f "$raw_file" "$DEBUG_LAST_CYCLE" 2>/dev/null || :
+  [ -n "$parser_out_file" ] && [ -f "$parser_out_file" ] && cp -f "$parser_out_file" "$DEBUG_LAST_PARSER" 2>/dev/null || :
+  [ -n "$stats_file" ] && [ -f "$stats_file" ] && cp -f "$stats_file" "$DEBUG_LAST_STATS" 2>/dev/null || printf '{"frames_emitted":0,"trailing_truncated":false}\n' > "$DEBUG_LAST_STATS"
+  printf '{"latest_cycle_bytes":%s,"latest_capture_bytes":%s,"frames_emitted":%s,"trailing_truncated":%s}\n' "$bytes" "$(file_size "$CAPTURE_FILE")" "$frames" "$truncated" > "$STATE_DIR/acquisition_debug.json"
+}
+
+acquisition_debug_json() {
+  local latest_cycle_bytes latest_capture_bytes frames_emitted trailing_truncated scan0_exists ctl_exists parser_exists ctl_after files_json
+  latest_cycle_bytes="$(file_size "$DEBUG_LAST_CYCLE")"
+  latest_capture_bytes="$(file_size "$CAPTURE_FILE")"
+  frames_emitted="$(sed -n 's/.*"frames_emitted":\([0-9][0-9]*\).*/\1/p' "$DEBUG_LAST_STATS" 2>/dev/null | head -n1)"
+  trailing_truncated="$(sed -n 's/.*"trailing_truncated":\(true\|false\).*/\1/p' "$DEBUG_LAST_STATS" 2>/dev/null | head -n1)"
+  [ -n "$frames_emitted" ] || frames_emitted=0
+  [ -n "$trailing_truncated" ] || trailing_truncated=false
+  local phy ath scan0
+  phy="$(resolve_phy)"
+  ath="$(ath_dir "$phy")"
+  scan0="$ath/spectral_scan0"
+  scan0_exists=$( [ -f "$scan0" ] && echo true || echo false )
+  ctl_exists=$( [ -f "$ath/spectral_scan_ctl" ] && echo true || echo false )
+  parser_exists=$( [ -x /usr/lib/rfeye/rfeye-spectral-parse ] && echo true || echo false )
+  ctl_after="$(spectral_ctl_value "$phy")"
+  files_json='["/tmp/rfeye/debug-last-cycle.tlv","/tmp/rfeye/debug-last-parser.txt","/tmp/rfeye/debug-last-stats.json","/tmp/rfeye/raw-test.tlv","/tmp/rfeye/raw-test-stats.json"]'
+  cat <<JSON
+{"ok":true,"latest_cycle_bytes":$latest_cycle_bytes,"latest_capture_bytes":$latest_capture_bytes,"frames_emitted":$frames_emitted,"trailing_truncated":$trailing_truncated,"scan0_exists":$scan0_exists,"ctl_exists":$ctl_exists,"parser_exists":$parser_exists,"spectral_ctl_after":"$(json_escape "$ctl_after")","debug_files":$files_json}
+JSON
+}
+
+capture_cycle_sequence() {
+  local phy="$1" bins="$2" snap_bytes="$3" parser="$4" raw_out="$5" stats_out="$6" mode="$7" sleep_before="$8" iface ath scan0 tmp stats frame parser_out bytes_read frames_emitted truncated parser_exit out_line
+  ath="$(ath_dir "$phy")"
+  scan0="$ath/spectral_scan0"
+  tmp="$STATE_DIR/cycle.$$.bin"
+  stats="$STATE_DIR/cycle.$$.stats"
+  iface="$(resolve_iface "$phy")"
+  frames_emitted=0
+  truncated=false
+  parser_exit=0
+
+  [ -f "$scan0" ] || return 1
+  [ -x "$parser" ] || return 1
+
+  rm -f "$tmp" "$stats" "$raw_out" "$stats_out" "$DEBUG_LAST_CYCLE" "$DEBUG_LAST_PARSER" "$DEBUG_LAST_STATS"
+  if [ "$mode" = "known-good" ]; then
+    spectral_reset_phy "$phy" "$bins" || true
+  fi
+  [ -n "$iface" ] && command -v iw >/dev/null 2>&1 && iw dev "$iface" scan >/dev/null 2>&1 || true
+  sleep "${sleep_before:-1}"
+  dd if="$scan0" of="$tmp" bs=1 count="$snap_bytes" 2>/dev/null || true
+  bytes_read="$(file_size "$tmp")"
+  scan_disable "$phy"
+  mv -f "$tmp" "$raw_out" 2>/dev/null || cp -f "$tmp" "$raw_out" 2>/dev/null || true
+  if [ -f "$raw_out" ]; then
+    frame="$($parser --input "$raw_out" --phy "$phy" --limit 1 --bins 256 2>/dev/null | head -n1)"
+    printf '%s\n' "$frame" > "$parser_out"
+    $parser --input "$raw_out" --phy "$phy" --limit 1 --bins 256 --stats >/dev/null 2>"$stats_out"
+    parser_exit=$?
+    if [ -s "$stats_out" ]; then
+      frames_emitted="$(sed -n 's/.*"frames_emitted":\([0-9][0-9]*\).*/\1/p' "$stats_out" | head -n1)"
+      truncated="$(sed -n 's/.*"trailing_truncated":\(true\|false\).*/\1/p' "$stats_out" | head -n1)"
+      [ -n "$frames_emitted" ] || frames_emitted=0
+      [ -n "$truncated" ] || truncated=false
+    else
+      printf '{"frames_emitted":0,"trailing_truncated":false}\n' > "$stats_out"
+    fi
+    write_debug_artifacts "$raw_out" "$parser_out" "$stats_out" "$bytes_read" "$frames_emitted" "$truncated"
+    if [ -n "$frame" ]; then
+      printf '%s\n' "$frame"
+      return 0
+    fi
+  fi
+  [ -s "$stats_out" ] || printf '{"frames_emitted":0,"trailing_truncated":false}\n' > "$stats_out"
+  write_debug_artifacts "$raw_out" "$parser_out" "$stats_out" "$bytes_read" "$frames_emitted" "$truncated"
+  return 1
+}
+
 render_bundle() {
-  local r c w wf_rows amb_rows min_dbm max_dbm
+  local r c w wf_rows amb_rows min_dbm max_dbm acq err_val
   min_dbm="$(cfg_get min_dbm "$DEFAULT_MIN_DBM")"
   max_dbm="$(cfg_get max_dbm "$DEFAULT_MAX_DBM")"
   r="$(radio_json)"
@@ -392,45 +475,28 @@ render_bundle() {
   w="$( [ -s "$WAVEFORM_FILE" ] && cat "$WAVEFORM_FILE" || render_waveform_default )"
   wf_rows="$(json_array_from_lines "$WATERFALL_FILE")"
   amb_rows="$(ambient_rows_json)"
+  acq="$( [ -s "$STATE_DIR/acquisition_debug.json" ] && cat "$STATE_DIR/acquisition_debug.json" || acquisition_debug_json )"
+  err_val="$(session_num no_frame_count 0)"
+  if [ "$(session_num frames_captured 0)" -eq 0 ] 2>/dev/null; then
+    c="$(printf '%s' "$c" | sed 's/"error":"[^"]*"/"error":"no parsed frames"/')"
+  fi
 
   cat > "$BUNDLE_FILE" <<JSON
-{"ok":true,"radio":$r,"capture":$c,"waveform":$w,"waterfall":{"rows":$wf_rows,"min_dbm":$min_dbm,"max_dbm":$max_dbm},"ambient":{"rows":$amb_rows,"mode":"minute_peak"}}
+{"ok":true,"radio":$r,"capture":$c,"waveform":$w,"waterfall":{"rows":$wf_rows,"min_dbm":$min_dbm,"max_dbm":$max_dbm},"ambient":{"rows":$amb_rows,"mode":"minute_peak"},"acquisition_debug":$acq}
 JSON
   cat "$BUNDLE_FILE"
 }
 
 capture_once() {
   # stdout: frame JSON if success, empty otherwise
-  # side effects: writes CAPTURE_FILE and updates BYTES_FILE (bytes in latest capture)
-  local phy="$1" bins="$2" snap_bytes="$3" parser="$4" iface tmp stats bytes_read frame
-  local ath scan0
-  ath="$(ath_dir "$phy")"
-  scan0="$ath/spectral_scan0"
-  tmp="$STATE_DIR/cycle.$$.bin"
-  stats="$STATE_DIR/cycle.$$.stats"
-  iface="$(resolve_iface "$phy")"
-
-  [ -f "$scan0" ] || return 1
-  [ -x "$parser" ] || return 1
-
-  rm -f "$tmp" "$stats"
-  spectral_reset_phy "$phy" "$bins" || true
-  [ -n "$iface" ] && command -v iw >/dev/null 2>&1 && iw dev "$iface" scan >/dev/null 2>&1 || true
-  dd if="$scan0" of="$tmp" bs=1 count="$snap_bytes" 2>/dev/null || true
-  scan_disable "$phy"
-
-  bytes_read="$(file_size "$tmp")"
-  echo "$bytes_read" > "$BYTES_FILE" 2>/dev/null || true
-  mv -f "$tmp" "$CAPTURE_FILE" 2>/dev/null || true
-
-  frame="$($parser --input "$CAPTURE_FILE" --phy "$phy" --limit 1 --bins 256 2>/dev/null | head -n1)"
-  rm -f "$stats" "$tmp"
-  if [ -n "$frame" ]; then
-    printf '%s\n' "$frame" > "$FRAME_RAW_FILE"
-    printf '%s\n' "$frame"
-    return 0
-  fi
-  return 1
+  local phy="$1" bins="$2" snap_bytes="$3" parser="$4" frame raw_out parser_out stats_out
+  raw_out="$CAPTURE_FILE"
+  parser_out="$FRAME_RAW_FILE"
+  stats_out="$STATE_DIR/latest_parser_stats.json"
+  frame="$(capture_cycle_sequence "$phy" "$bins" "$snap_bytes" "$parser" "$raw_out" "$parser_out" "$stats_out" "known-good" 1 2>/dev/null || true)"
+  [ -n "$frame" ] || return 1
+  printf '%s\n' "$frame"
+  return 0
 }
 
 cleanup_stale() {
@@ -541,18 +607,19 @@ JSON
 
 capture_worker() {
   local phy="$1" seconds="$2" bins="$3" max_bytes="$4" snap_bytes="$5" interval_ms="$6" ui_bins="$7"
-  local parser ath scan0 start_ts end_ts now frames bytes nof latest radio frame interval_s
+  local parser ath scan0 start_ts end_ts now frames bytes nof latest radio frame interval_s err=""
   parser="/usr/lib/rfeye/rfeye-spectral-parse"
   ath="$(ath_dir "$phy")"
   scan0="$ath/spectral_scan0"
 
   finish_worker() {
-    local final_state err started
+    local final_state started
     scan_disable "$phy"
     rm -f "$PID_FILE" "$END_FILE"
     started="$(session_num started_at "$start_ts")"
     final_state="$(session_state)"
     [ "$final_state" = "error" ] || final_state="complete"
+    [ -n "$err" ] || err="$( [ "$frames" -gt 0 ] 2>/dev/null && echo "" || echo "no parsed frames" )"
     write_session "$final_state" "$started" "$(now_s)" "$frames" "$bytes" "$latest" "$nof" "$err"
     store_radio
     render_bundle >/dev/null 2>&1 || true
@@ -560,12 +627,14 @@ capture_worker() {
   trap 'finish_worker; exit 0' INT TERM HUP EXIT
 
   if [ ! -f "$scan0" ] || [ ! -x "$parser" ]; then
-    write_session "error" "$(now_s)" "$(now_s)" 0 0 0 0 "unsupported spectral path"
+    err="unsupported spectral path"
+    write_session "error" "$(now_s)" "$(now_s)" 0 0 0 0 "$err"
     exit 1
   fi
 
   case "$bins" in 64|128|256) ;; *) bins="$DEFAULT_BINS" ;; esac
   [ "$snap_bytes" -gt 0 ] 2>/dev/null || snap_bytes="$DEFAULT_SNAPSHOT_BYTES"
+  [ "$snap_bytes" -lt 65536 ] 2>/dev/null && snap_bytes=65536
   [ "$snap_bytes" -gt "$max_bytes" ] && snap_bytes="$max_bytes"
   [ "$ui_bins" -gt 15 ] 2>/dev/null || ui_bins="$DEFAULT_UI_BINS"
 
@@ -600,11 +669,13 @@ capture_worker() {
       bytes=$((bytes + cycle_bytes))
       frames=$((frames + 1))
       latest="$(now_s)"
+      err=""
       update_products_from_frame "$latest" "$radio" "$frame" "$ui_bins"
-      write_session "running" "$start_ts" "$end_ts" "$frames" "$bytes" "$latest" "$nof" ""
+      write_session "running" "$start_ts" "$end_ts" "$frames" "$bytes" "$latest" "$nof" "$err"
     else
       nof=$((nof + 1))
-      write_session "running" "$start_ts" "$end_ts" "$frames" "$bytes" "$latest" "$nof" "no frame"
+      err="no parsed frames"
+      write_session "running" "$start_ts" "$end_ts" "$frames" "$bytes" "$latest" "$nof" "$err"
     fi
 
     render_bundle >/dev/null 2>&1 || true
@@ -758,6 +829,46 @@ heatmap_bundle_cmd() {
   render_bundle
 }
 
+acquisition_debug_cmd() {
+  cleanup_stale
+  acquisition_debug_json
+}
+
+raw_capture_test_cmd() {
+  cleanup_stale
+  local phy bins seconds parser snap_bytes raw_out parser_out stats_out frame bytes_read frames_emitted truncated start_ts end_ts
+  phy="${3:-$(resolve_phy)}"
+  seconds="${1:-10}"
+  bins="${2:-$(cfg_get bins "$DEFAULT_BINS")}"
+  parser="/usr/lib/rfeye/rfeye-spectral-parse"
+  snap_bytes="$(cfg_get max_capture_bytes "$DEFAULT_MAX_CAPTURE_BYTES")"
+  [ "$snap_bytes" -lt 65536 ] 2>/dev/null && snap_bytes=65536
+  [ "$snap_bytes" -gt "$DEFAULT_MAX_CAPTURE_BYTES" ] && snap_bytes="$DEFAULT_MAX_CAPTURE_BYTES"
+  raw_out="$RAW_TEST_FILE"
+  parser_out="$STATE_DIR/raw-test-parser.txt"
+  stats_out="$RAW_TEST_STATS"
+  start_ts="$(now_s)"
+  end_ts=$((start_ts + seconds))
+  frame=""
+  while :; do
+    frame="$(capture_cycle_sequence "$phy" "$bins" "$snap_bytes" "$parser" "$raw_out" "$parser_out" "$stats_out" "known-good" 1 2>/dev/null || true)"
+    [ -n "$frame" ] && break
+    [ "$(now_s)" -ge "$end_ts" ] && break
+    sleep 1
+  done
+  bytes_read="$(file_size "$raw_out")"
+  frames_emitted="$(sed -n 's/.*"frames_emitted":\([0-9][0-9]*\).*/\1/p' "$stats_out" 2>/dev/null | head -n1)"
+  truncated="$(sed -n 's/.*"trailing_truncated":\(true\|false\).*/\1/p' "$stats_out" 2>/dev/null | head -n1)"
+  [ -n "$frames_emitted" ] || frames_emitted=0
+  [ -n "$truncated" ] || truncated=false
+  if [ -n "$frame" ]; then
+    echo "{\"ok\":true,\"bytes_read\":$bytes_read,\"frames_emitted\":$frames_emitted,\"trailing_truncated\":$truncated,\"raw_test_file\":\"$RAW_TEST_FILE\",\"parser_stats\":\"$RAW_TEST_STATS\"}"
+  else
+    echo "{\"ok\":false,\"error\":\"no parsed frames\",\"bytes_read\":$bytes_read,\"frames_emitted\":$frames_emitted,\"trailing_truncated\":$truncated,\"raw_test_file\":\"$RAW_TEST_FILE\",\"parser_stats\":\"$RAW_TEST_STATS\"}"
+    return 1
+  fi
+}
+
 daemon_cmd() {
   while true; do
     if running_pid && [ -f "$END_FILE" ]; then
@@ -784,13 +895,15 @@ case "$cmd" in
   waterfall) waterfall_cmd ;;
   ambient) ambient_cmd ;;
   heatmap_bundle) heatmap_bundle_cmd ;;
+  acquisition_debug) acquisition_debug_cmd ;;
+  raw_capture_test) raw_capture_test_cmd "$@" ;;
   reset) reset_cmd "${1:-$(resolve_phy)}" ;;
   start) start_cmd "$@" ;;
   stop) stop_cmd ;;
   snapshot) snapshot_cmd ;;
   daemon) daemon_cmd ;;
   *)
-    echo '{"ok":false,"error":"usage: rfeye-agent {status|capture_status|radio_info|ui_state|waveform|waterfall|ambient|heatmap_bundle|reset|start [seconds bins phy]|stop|snapshot|daemon}"}'
+    echo '{"ok":false,"error":"usage: rfeye-agent {status|capture_status|radio_info|ui_state|waveform|waterfall|ambient|heatmap_bundle|acquisition_debug|raw_capture_test|reset|start [seconds bins phy]|stop|snapshot|daemon}"}'
     exit 2
     ;;
 esac

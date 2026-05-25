@@ -44,6 +44,12 @@ case "$ACTION" in
   heatmap_bundle)
     exec "$AGENT" heatmap_bundle
     ;;
+  acquisition_debug)
+    exec "$AGENT" acquisition_debug
+    ;;
+  raw_capture_test)
+    exec "$AGENT" raw_capture_test "${SECONDS_ARG:-10}" "${BINS_ARG:-128}" "${PHY_ARG:-phy0}"
+    ;;
   reset)
     exec "$AGENT" reset "${PHY_ARG:-phy0}"
     ;;
