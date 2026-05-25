@@ -58,10 +58,15 @@ cat <<'HTML'
         <button id="stop">Stop</button>
         <button id="reset">Reset</button>
       </div>
-      <div>State: <b id="state" class="muted">idle</b></div>
+      <div>Capture state: <b id="state" class="muted">idle</b></div>
       <div>Frames captured: <b id="frames">0</b></div>
       <div>No-frame count: <b id="noframes">0</b></div>
+      <div>Last frame age: <b id="lastage">--</b></div>
+      <div>Frame rate: <b id="framerate">0/min</b></div>
+      <div>Capture progress: <b id="progress">0%</b></div>
+      <div>Sample interval: <b id="interval">--</b></div>
       <div>Capture bytes: <b id="bytes">0</b></div>
+      <div>Parser mode: <b id="parsermode">resync</b></div>
     </div>
 
     <div class="rfeye-card">
@@ -79,6 +84,7 @@ cat <<'HTML'
       <div>Waterfall rows: <b id="wfrows">0</b></div>
       <div>Ambient rows: <b id="amrows">0</b></div>
       <div>Ambient mode: <b id="ammode">minute_peak</b></div>
+      <div>Status: <b id="livestatus" class="muted">waiting for next frame</b></div>
     </div>
   </div>
 
@@ -102,6 +108,7 @@ cat <<'HTML'
   const waveform = document.getElementById('waveform').getContext('2d');
   const waterfall = document.getElementById('waterfall').getContext('2d');
   const ambient = document.getElementById('ambient').getContext('2d');
+  let lastWaveform = null, lastWaterfall = null, lastAmbient = null;
 
   function qs(action) {
     const phy = encodeURIComponent(document.getElementById('phy').value || 'phy0');
@@ -187,13 +194,22 @@ cat <<'HTML'
 
     const c = j.capture || {};
     const r = (j.radio && j.radio.ok) ? j.radio : {};
-    const w = j.waveform || {};
-    const wf = j.waterfall || { rows: [], min_dbm: -125, max_dbm: -65 };
-    const am = j.ambient || { rows: [], mode: 'minute_peak' };
+    let w = j.waveform || {};
+    let wf = j.waterfall || { rows: [], min_dbm: -125, max_dbm: -65 };
+    let am = j.ambient || { rows: [], mode: 'minute_peak' };
+    const m = j.capture_metrics || {};
+    if ((w.bins || []).length) lastWaveform = w; else if (lastWaveform) w = lastWaveform;
+    if ((wf.rows || []).length) lastWaterfall = wf; else if (lastWaterfall) wf = lastWaterfall;
+    if ((am.rows || []).length) lastAmbient = am; else if (lastAmbient) am = lastAmbient;
 
     document.getElementById('frames').textContent = String(c.frames_captured || 0);
     document.getElementById('noframes').textContent = String(c.no_frame_count || 0);
-    document.getElementById('bytes').textContent = String(c.bytes_written || 0);
+    document.getElementById('bytes').textContent = String(c.bytes_written || m.bytes_written || 0);
+    document.getElementById('lastage').textContent = (m.last_frame_age_seconds ?? -1) >= 0 ? `${m.last_frame_age_seconds}s` : '--';
+    document.getElementById('framerate').textContent = `${m.frames_per_minute ?? '0.0'}/min (${m.frames_per_second ?? '0.00'}/s)`;
+    document.getElementById('progress').textContent = `${m.capture_progress_percent ?? 0}%`;
+    document.getElementById('interval').textContent = `${m.sample_interval_ms ?? '--'} ms / ${m.snapshot_bytes ?? '--'} bytes`;
+    document.getElementById('parsermode').textContent = m.parser_mode || 'resync';
     document.getElementById('rfreq').textContent = r.frequency_mhz ? `${r.frequency_mhz} MHz` : '--';
     document.getElementById('rchan').textContent = r.channel || '--';
     document.getElementById('rwidth').textContent = r.width_mhz ? `${r.width_mhz} MHz` : '--';
@@ -204,9 +220,12 @@ cat <<'HTML'
     document.getElementById('amrows').textContent = String((am.rows || []).length);
     document.getElementById('ammode').textContent = am.mode || 'minute_peak';
 
-    if (c.state === 'running') setState('running', true);
+    const hasRows = ((wf.rows || []).length > 0) || ((w.bins || []).length > 0);
+    if (c.state === 'running') setState(hasRows ? 'running' : 'waiting for next frame', true);
+    else if (c.state === 'error' && hasRows) setState('waiting for next frame', null);
     else if (c.state === 'error') setState('error', false);
     else setState(c.state || 'idle', null);
+    document.getElementById('livestatus').textContent = hasRows ? 'live data available' : 'waiting for next frame';
 
     drawWaveform(w);
     drawHeat(waterfall, wf.rows || [], wf.min_dbm ?? -125, wf.max_dbm ?? -65);

@@ -2,7 +2,7 @@ include $(TOPDIR)/rules.mk
 
 PKG_NAME:=aredn-rfeye
 PKG_VERSION:=0.1.0
-PKG_RELEASE:=8
+PKG_RELEASE:=9
 PKG_LICENSE:=GPL-3.0-or-later
 PKG_MAINTAINER:=Mathison Ott
 
@@ -46,6 +46,7 @@ define Package/aredn-rfeye/install
 
 	$(INSTALL_DIR) $(1)/www/cgi-bin/apps/rfeye/data
 	$(INSTALL_BIN) ./files/www/cgi-bin/apps/rfeye/data/agent.sh $(1)/www/cgi-bin/apps/rfeye/data/agent.sh
+	[ ! -f ./files/www/cgi-bin/apps/rfeye/data/download.sh ] || $(INSTALL_BIN) ./files/www/cgi-bin/apps/rfeye/data/download.sh $(1)/www/cgi-bin/apps/rfeye/data/download.sh
 
 	[ ! -d ./files/www/apps ] || $(CP) ./files/www/apps $(1)/www/
 endef

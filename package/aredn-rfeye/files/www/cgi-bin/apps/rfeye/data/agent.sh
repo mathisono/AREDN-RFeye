@@ -1,9 +1,5 @@
 #!/bin/sh
 
-echo "Content-Type: application/json"
-echo "Cache-Control: no-store"
-echo
-
 ACTION="${QUERY_STRING#*action=}"
 [ "$ACTION" = "$QUERY_STRING" ] && ACTION="status" || ACTION="${ACTION%%&*}"
 
@@ -18,6 +14,37 @@ PHY_ARG="${QUERY_STRING#*phy=}"
 
 AGENT="/usr/sbin/rfeye-agent"
 SURVEY="/usr/sbin/rfeye-survey"
+
+case "$ACTION" in
+  download_tlv)
+    FILE="/tmp/rfeye/latest.tlv"
+    [ -s "$FILE" ] || FILE="/tmp/rfeye/raw-test.tlv"
+    if [ ! -s "$FILE" ]; then
+      echo "Content-Type: application/json"
+      echo "Cache-Control: no-store"
+      echo
+      echo '{"ok":false,"error":"no TLV capture available"}'
+      exit 1
+    fi
+    echo "Content-Type: application/octet-stream"
+    echo "Content-Disposition: attachment; filename=rfeye-latest.tlv"
+    echo "Cache-Control: no-store"
+    echo
+    exec cat "$FILE"
+    ;;
+  download_jsonl)
+    echo "Content-Type: application/x-ndjson"
+    echo "Content-Disposition: attachment; filename=rfeye-frames.jsonl"
+    echo "Cache-Control: no-store"
+    echo
+    exec "$AGENT" export_jsonl
+    ;;
+  *)
+    echo "Content-Type: application/json"
+    echo "Cache-Control: no-store"
+    echo
+    ;;
+esac
 
 case "$ACTION" in
   status)
@@ -52,6 +79,12 @@ case "$ACTION" in
     ;;
   acquisition_debug)
     exec "$AGENT" acquisition_debug
+    ;;
+  export_tlv_info)
+    exec "$AGENT" export_tlv_info
+    ;;
+  export_jsonl)
+    exec "$AGENT" export_jsonl
     ;;
   raw_inspect)
     exec "$AGENT" raw_inspect

@@ -1,5 +1,30 @@
 # RFeye IPK Build Notes
 
+## r9 build (2026-05-25 UTC)
+
+- Commit: b738b0c
+- Package: `aredn-rfeye 0.1.0-r9`
+- IPK filename: `aredn-rfeye_0.1.0-r9_mips_24kc.ipk`
+- SHA256: `ec25e05fab06640e96514642391058986681ce533879e73ccad9e130a90f7638`
+- Build tree path: `/home/bill/src/build-sdk/openwrt-sdk-ath79-generic`
+- Build commands:
+  - `rsync -a --delete /home/bill/src/AREDN-RFeye/package/aredn-rfeye/ /home/bill/src/build-sdk/openwrt-sdk-ath79-generic/package/aredn-rfeye/`
+  - `rsync -a --delete /home/bill/src/AREDN-RFeye/src/ /home/bill/src/build-sdk/openwrt-sdk-ath79-generic/package/aredn-rfeye/src/`
+  - `LD_LIBRARY_PATH=/home/bill/src/local-gawk/lib make package/aredn-rfeye/clean V=s`
+  - `LD_LIBRARY_PATH=/home/bill/src/local-gawk/lib make package/aredn-rfeye/compile V=s`
+- Validation results before build:
+  - `sh -n package/aredn-rfeye/files/usr/sbin/rfeye-agent` ✅
+  - `sh -n package/aredn-rfeye/files/usr/sbin/rfeye-survey` ✅
+  - `sh -n package/aredn-rfeye/files/www/cgi-bin/apps/rfeye/data/agent.sh` ✅
+  - `sh -n package/aredn-rfeye/files/www/cgi-bin/apps/rfeye/data/download.sh` ✅
+  - `sh -n package/aredn-rfeye/files/www/cgi-bin/apps/rfeye/user` ✅
+  - `cc -Wall -Wextra -o /tmp/rfeye-spectral-parse src/rfeye_spectral_parse.c` ✅
+  - `sh scripts/test-parser-smoke.sh` ✅
+  - `sh scripts/test-hardware-fixture-probe.sh` ✅
+- Build notes:
+  - r9 improves live capture cadence/status, preserves the resync parser path, and adds CLI/CGI export diagnostics.
+- Node retest: PASS through MSE-88 on KJ6DZB-WSB-ACdish5. `raw_capture_test` emitted 1 frame; `pipeline_test` passed all stages; timed 10-second capture produced 8 frames in final quick retest (`capture_status.frames_captured=8`, `pipeline_status.waterfall_rows=7`); export/download endpoints returned valid data/headers; final `spectral_scan_ctl=disable`.
+
 ## r8 build (2026-05-25 UTC)
 
 - Commit: pending local commit
