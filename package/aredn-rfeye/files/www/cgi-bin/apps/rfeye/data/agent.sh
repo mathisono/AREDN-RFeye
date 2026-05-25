@@ -47,6 +47,12 @@ case "$ACTION" in
   acquisition_debug)
     exec "$AGENT" acquisition_debug
     ;;
+  raw_inspect)
+    exec "$AGENT" raw_inspect
+    ;;
+  parser_probe)
+    exec "$AGENT" parser_probe
+    ;;
   raw_capture_test)
     exec "$AGENT" raw_capture_test "${SECONDS_ARG:-10}" "${BINS_ARG:-128}" "${PHY_ARG:-phy0}"
     ;;

@@ -1,5 +1,27 @@
 # RFeye IPK Build Notes
 
+## r6 build (2026-05-24 UTC)
+
+- Commit: pending local commit
+- Package: `aredn-rfeye 0.1.0-r6`
+- IPK filename: `aredn-rfeye_0.1.0-r6_mips_24kc.ipk`
+- SHA256: `4d04b2c722a21bc4a37b96c149e3df3169e348055cd458e10744f2b61f8da51a`
+- Build tree path: `/home/bill/src/build-sdk/openwrt-sdk-24.10.0-ath79-generic_gcc-13.3.0_musl.Linux-x86_64`
+- Build commands:
+  - `rsync -av --delete "/home/bill/src/AREDN-RFeye/package/aredn-rfeye/" "/home/bill/src/build-sdk/openwrt-sdk-24.10.0-ath79-generic_gcc-13.3.0_musl.Linux-x86_64/package/aredn-rfeye/"`
+  - `rsync -av --delete "/home/bill/src/AREDN-RFeye/src/" "/home/bill/src/build-sdk/openwrt-sdk-24.10.0-ath79-generic_gcc-13.3.0_musl.Linux-x86_64/package/aredn-rfeye/src/"`
+  - `LD_LIBRARY_PATH=/home/bill/src/local-gawk/lib make package/aredn-rfeye/clean V=s`
+  - `LD_LIBRARY_PATH=/home/bill/src/local-gawk/lib make package/aredn-rfeye/compile V=s`
+- Validation results before build:
+  - `sh -n package/aredn-rfeye/files/usr/sbin/rfeye-agent` ✅
+  - `sh -n package/aredn-rfeye/files/usr/sbin/rfeye-survey` ✅
+  - `sh -n package/aredn-rfeye/files/www/cgi-bin/apps/rfeye/data/agent.sh` ✅
+  - `sh -n package/aredn-rfeye/files/www/cgi-bin/apps/rfeye/user` ✅
+  - `cc -Wall -Wextra -o /tmp/rfeye-spectral-parse src/rfeye_spectral_parse.c` ✅
+  - `sh scripts/test-parser-smoke.sh` ✅
+- Build notes:
+  - `rfeye-spectral-parse` in the final package includes `--probe` support.
+
 ## r5 build (2026-05-25 UTC)
 
 - Commit: `8fbc87f` (`rfeye: add acquisition diagnostics for r5`)

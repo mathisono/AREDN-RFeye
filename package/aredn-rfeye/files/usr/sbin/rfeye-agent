@@ -418,6 +418,101 @@ acquisition_debug_json() {
 JSON
 }
 
+hex_prefix() {
+  local file="$1" n="$2"
+  [ -f "$file" ] || { echo ""; return 0; }
+  hexdump -v -n "$n" -e '1/1 "%02x"' "$file" 2>/dev/null
+}
+
+count_bytes() {
+  local file="$1"
+  [ -f "$file" ] || { echo "0 0"; return 0; }
+  hexdump -v -e '1/1 "%u\n"' "$file" 2>/dev/null | awk '{if($1==0)z++; else nz++} END{printf "%d %d\n", z+0, nz+0}'
+}
+
+first_nonzero_offset() {
+  local file="$1"
+  [ -f "$file" ] || { echo -1; return 0; }
+  hexdump -v -e '1/1 "%u\n"' "$file" 2>/dev/null | awk 'BEGIN{idx=0; found=0} {if($1+0!=0){print idx; found=1; exit} idx++} END{if(!found) print -1}'
+}
+
+byte_histogram_json() {
+  local file="$1"
+  [ -f "$file" ] || { echo '{}'; return 0; }
+  hexdump -v -n 4096 -e '1/1 "%u\n"' "$file" 2>/dev/null | awk '
+    { c[sprintf("%02x", $1+0)]++ }
+    END{
+      printf "{"
+      for(i=0;i<256;i++){
+        k=sprintf("%02x", i)
+        printf "%s\"%s\":%d", (i?",":""), k, c[k]+0
+      }
+      printf "}"
+    }
+  '
+}
+
+likely_binary_file() {
+  local file="$1"
+  [ -f "$file" ] || { echo false; return 0; }
+  hexdump -v -n 4096 -e '1/1 "%u\n"' "$file" 2>/dev/null | awk '
+    { b=$1+0; if(b==0 || b<9 || (b>13 && b<32) || b>126){print "true"; found=1; exit} }
+    END{if(!found) print "false"}
+  '
+}
+
+inspect_file_json() {
+  local file="$1" parser_stats="$2" size z nz hex64 hex256 firstnz binary hist
+  if [ ! -f "$file" ]; then
+    printf '{"path":"%s","exists":false}' "$file"
+    return 0
+  fi
+  size="$(file_size "$file")"
+  read z nz <<EOF
+$(count_bytes "$file")
+EOF
+  hex64="$(hex_prefix "$file" 64)"
+  hex256="$(hex_prefix "$file" 256)"
+  firstnz="$(first_nonzero_offset "$file")"
+  binary="$(likely_binary_file "$file")"
+  hist="$(byte_histogram_json "$file")"
+  printf '{"path":"%s","exists":true,"size_bytes":%s,"first_64_hex":"%s","first_256_hex":"%s","count_zero_bytes":%s,"count_nonzero_bytes":%s,"first_nonzero_offset":%s,"likely_binary":%s,"histogram_first_4096":%s' \
+    "$file" "$size" "$hex64" "$hex256" "$z" "$nz" "$firstnz" "$binary" "$hist"
+  if [ -n "$parser_stats" ] && [ -s "$parser_stats" ]; then
+    printf ',"parser_stats":'
+    cat "$parser_stats"
+  fi
+  printf '}'
+}
+
+raw_inspect_cmd() {
+  cleanup_stale
+  local stats_file
+  stats_file=""
+  for f in "$RAW_TEST_STATS" "$STATE_DIR/latest_parser_stats.json" "$DEBUG_LAST_STATS"; do
+    [ -s "$f" ] && { stats_file="$f"; break; }
+  done
+  printf '{"ok":true,"files":['
+  local first=1 file
+  for file in "$RAW_TEST_FILE" "$CAPTURE_FILE" "$DEBUG_LAST_CYCLE"; do
+    [ -f "$file" ] || continue
+    printf '%s' "$([ "$first" -eq 1 ] && echo '' || echo ',')"
+    inspect_file_json "$file" "$stats_file"
+    first=0
+  done
+  printf ']'
+  if [ -n "$stats_file" ] && [ -s "$stats_file" ]; then
+    printf ',"parser_stats":'
+    cat "$stats_file"
+  fi
+  printf '}\n'
+}
+
+parser_probe_cmd() {
+  cleanup_stale
+  /usr/lib/rfeye/rfeye-spectral-parse --probe --input "$RAW_TEST_FILE"
+}
+
 capture_cycle_sequence() {
   local phy="$1" bins="$2" snap_bytes="$3" parser="$4" raw_out="$5" stats_out="$6" mode="$7" sleep_before="$8" iface ath scan0 tmp stats frame parser_out bytes_read frames_emitted truncated parser_exit out_line
   ath="$(ath_dir "$phy")"
@@ -896,6 +991,8 @@ case "$cmd" in
   ambient) ambient_cmd ;;
   heatmap_bundle) heatmap_bundle_cmd ;;
   acquisition_debug) acquisition_debug_cmd ;;
+  raw_inspect) raw_inspect_cmd ;;
+  parser_probe) parser_probe_cmd ;;
   raw_capture_test) raw_capture_test_cmd "$@" ;;
   reset) reset_cmd "${1:-$(resolve_phy)}" ;;
   start) start_cmd "$@" ;;
@@ -903,7 +1000,7 @@ case "$cmd" in
   snapshot) snapshot_cmd ;;
   daemon) daemon_cmd ;;
   *)
-    echo '{"ok":false,"error":"usage: rfeye-agent {status|capture_status|radio_info|ui_state|waveform|waterfall|ambient|heatmap_bundle|acquisition_debug|raw_capture_test|reset|start [seconds bins phy]|stop|snapshot|daemon}"}'
+    echo '{"ok":false,"error":"usage: rfeye-agent {status|capture_status|radio_info|ui_state|waveform|waterfall|ambient|heatmap_bundle|acquisition_debug|raw_inspect|parser_probe|raw_capture_test|reset|start [seconds bins phy]|stop|snapshot|daemon}"}'
     exit 2
     ;;
 esac
