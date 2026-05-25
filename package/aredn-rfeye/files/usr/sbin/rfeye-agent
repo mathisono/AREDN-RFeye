@@ -27,6 +27,7 @@ DEBUG_LAST_PARSER="$STATE_DIR/debug-last-parser.txt"
 DEBUG_LAST_STATS="$STATE_DIR/debug-last-stats.json"
 RAW_TEST_FILE="$STATE_DIR/raw-test.tlv"
 RAW_TEST_STATS="$STATE_DIR/raw-test-stats.json"
+PIPELINE_STATUS_FILE="$STATE_DIR/pipeline-status.json"
 
 DEFAULT_PHY="phy0"
 DEFAULT_MODE="background"
@@ -269,10 +270,12 @@ csv_peak() {
 }
 
 sleep_interval_ms() {
-  local ms="$1"
+  local ms="$1" sec
   [ "$ms" -gt 0 ] 2>/dev/null || ms="$DEFAULT_SAMPLE_INTERVAL_MS"
-  if [ "$ms" -lt 200 ] 2>/dev/null; then ms=200; fi
-  awk -v ms="$ms" 'BEGIN{ printf "%.3f\n", ms/1000.0 }'
+  if [ "$ms" -lt 1000 ] 2>/dev/null; then ms=1000; fi
+  sec=$(( (ms + 999) / 1000 ))
+  [ "$sec" -gt 0 ] 2>/dev/null || sec=1
+  echo "$sec"
 }
 
 acquire_lock() {
@@ -288,6 +291,9 @@ acquire_lock() {
 }
 
 release_lock() { rmdir "$LOCK_DIR" 2>/dev/null || true; }
+remove_stale_lock() {
+  running_pid || rm -rf "$LOCK_DIR" 2>/dev/null || true
+}
 
 write_session() {
   local state="$1" started="$2" ends="$3" frames="$4" bytes="$5" latest="$6" nof="$7" err="${8:-}"
@@ -386,6 +392,75 @@ ambient_rows_json() {
     fi
   fi
   json_array_from_lines "$AMBIENT_FILE"
+}
+
+
+count_csv_fields() {
+  local csv="$1"
+  [ -n "$csv" ] || { echo 0; return 0; }
+  awk -v s="$csv" 'BEGIN{print split(s,a,",")}'
+}
+
+count_json_rows_file() {
+  local file="$1"
+  [ -s "$file" ] && awk 'NF{n++} END{print n+0}' "$file" || echo 0
+}
+
+pipeline_status_json() {
+  if [ -s "$PIPELINE_STATUS_FILE" ]; then
+    cat "$PIPELINE_STATUS_FILE"
+  else
+    echo '{"ok":true,"last_cycle_time":0,"raw_bytes":0,"parser_exit":0,"parser_frame_present":false,"parser_frame_bytes":0,"bins_extracted":false,"normalized_bins_count":0,"waveform_written":false,"waveform_bins":0,"waterfall_rows":0,"ambient_rows":0,"frames_captured":0,"last_error":""}'
+  fi
+}
+
+ambient_row_count() {
+  local n
+  n="$(count_json_rows_file "$AMBIENT_FILE")"
+  if [ -s "$AMBIENT_WORK_FILE" ]; then
+    local curm curb
+    curm="$(cut -d'|' -f1 "$AMBIENT_WORK_FILE" 2>/dev/null || true)"
+    curb="$(cut -d'|' -f2- "$AMBIENT_WORK_FILE" 2>/dev/null || true)"
+    [ -n "$curm" ] && [ -n "$curb" ] && n=$((n + 1))
+  fi
+  echo "$n"
+}
+
+ambient_pending_bool() {
+  if [ -s "$AMBIENT_WORK_FILE" ]; then
+    local curm curb
+    curm="$(cut -d'|' -f1 "$AMBIENT_WORK_FILE" 2>/dev/null || true)"
+    curb="$(cut -d'|' -f2- "$AMBIENT_WORK_FILE" 2>/dev/null || true)"
+    [ -n "$curm" ] && [ -n "$curb" ] && { echo true; return 0; }
+  fi
+  echo false
+}
+
+ambient_current_json() {
+  if [ -s "$AMBIENT_WORK_FILE" ]; then
+    local curm curb
+    curm="$(cut -d'|' -f1 "$AMBIENT_WORK_FILE" 2>/dev/null || true)"
+    curb="$(cut -d'|' -f2- "$AMBIENT_WORK_FILE" 2>/dev/null || true)"
+    if [ -n "$curm" ] && [ -n "$curb" ]; then
+      echo "{\"timestamp\":$((curm * 60)),\"bins\":[${curb}]}"
+      return 0
+    fi
+  fi
+  echo 'null'
+}
+
+write_pipeline_status() {
+  local raw_bytes="${1:-0}" parser_exit="${2:-0}" frame_present="${3:-false}" frame_bytes="${4:-0}" bins_extracted="${5:-false}" norm_count="${6:-0}" waveform_written="${7:-false}" waveform_bins="${8:-0}" waterfall_rows="${9:-0}"
+  shift 9 || true
+  local ambient_rows="${1:-0}" frames_captured="${2:-0}" last_error="${3:-}"
+  cat > "$PIPELINE_STATUS_FILE" <<JSON
+{"ok":true,"last_cycle_time":$(now_s),"raw_bytes":$raw_bytes,"parser_exit":$parser_exit,"parser_frame_present":$frame_present,"parser_frame_bytes":$frame_bytes,"bins_extracted":$bins_extracted,"normalized_bins_count":$norm_count,"waveform_written":$waveform_written,"waveform_bins":$waveform_bins,"waterfall_rows":$waterfall_rows,"ambient_rows":$ambient_rows,"frames_captured":$frames_captured,"last_error":"$(json_escape "$last_error")"}
+JSON
+}
+
+pipeline_status_cmd() {
+  cleanup_stale
+  pipeline_status_json
 }
 
 write_debug_artifacts() {
@@ -547,17 +622,9 @@ capture_cycle_sequence() {
   scan_disable "$phy"
   mv -f "$tmp" "$raw_out" 2>/dev/null || cp -f "$tmp" "$raw_out" 2>/dev/null || true
   if [ -f "$raw_out" ]; then
-    frame="$($parser --input "$raw_out" --phy "$phy" --limit 1 --bins "$bins" 2>/dev/null | head -n1)"
+    frame="$($parser --resync --input "$raw_out" --phy "$phy" --limit 1 --bins "$bins" 2>/dev/null | head -n1)"
     printf '%s\n' "$frame" > "$parser_out"
-    if [ -z "$frame" ]; then
-      frame="$($parser --resync --input "$raw_out" --phy "$phy" --limit 1 --bins "$bins" 2>/dev/null | head -n1)"
-      printf '%s\n' "$frame" > "$parser_out"
-    fi
-    if [ -n "$frame" ]; then
-      $parser --resync --input "$raw_out" --phy "$phy" --limit 1 --bins "$bins" --stats >/dev/null 2>"$stats_out"
-    else
-      $parser --input "$raw_out" --phy "$phy" --limit 1 --bins "$bins" --stats >/dev/null 2>"$stats_out"
-    fi
+    $parser --resync --input "$raw_out" --phy "$phy" --limit 1 --bins "$bins" --stats >/dev/null 2>"$stats_out"
     parser_exit=$?
     if [ -s "$stats_out" ]; then
       frames_emitted="$(sed -n 's/.*"frames_emitted":\([0-9][0-9]*\).*/\1/p' "$stats_out" | head -n1)"
@@ -579,7 +646,7 @@ capture_cycle_sequence() {
 }
 
 render_bundle() {
-  local r c w wf_rows amb_rows min_dbm max_dbm acq err_val
+  local r c w wf_rows amb_rows min_dbm max_dbm acq err_val amb_pending amb_current
   min_dbm="$(cfg_get min_dbm "$DEFAULT_MIN_DBM")"
   max_dbm="$(cfg_get max_dbm "$DEFAULT_MAX_DBM")"
   r="$(radio_json)"
@@ -587,14 +654,18 @@ render_bundle() {
   w="$( [ -s "$WAVEFORM_FILE" ] && cat "$WAVEFORM_FILE" || render_waveform_default )"
   wf_rows="$(json_array_from_lines "$WATERFALL_FILE")"
   amb_rows="$(ambient_rows_json)"
+  amb_pending="$(ambient_pending_bool)"
+  amb_current="$(ambient_current_json)"
   acq="$( [ -s "$STATE_DIR/acquisition_debug.json" ] && cat "$STATE_DIR/acquisition_debug.json" || acquisition_debug_json )"
   err_val="$(session_num no_frame_count 0)"
   if [ "$(session_num frames_captured 0)" -eq 0 ] 2>/dev/null; then
     c="$(printf '%s' "$c" | sed 's/"error":"[^"]*"/"error":"no parsed frames"/')"
   fi
 
+  local pipe
+  pipe="$(pipeline_status_json)"
   cat > "$BUNDLE_FILE" <<JSON
-{"ok":true,"radio":$r,"capture":$c,"waveform":$w,"waterfall":{"rows":$wf_rows,"min_dbm":$min_dbm,"max_dbm":$max_dbm},"ambient":{"rows":$amb_rows,"mode":"minute_peak"},"acquisition_debug":$acq}
+{"ok":true,"radio":$r,"capture":$c,"waveform":$w,"waterfall":{"rows":$wf_rows,"min_dbm":$min_dbm,"max_dbm":$max_dbm},"ambient":{"rows":$amb_rows,"mode":"minute_peak","pending":$amb_pending,"current":$amb_current},"acquisition_debug":$acq,"pipeline":$pipe}
 JSON
   cat "$BUNDLE_FILE"
 }
@@ -614,6 +685,7 @@ capture_once() {
 cleanup_stale() {
   if ! running_pid; then
     rm -f "$PID_FILE" "$END_FILE"
+    remove_stale_lock
     [ -s "$SESSION_FILE" ] || write_session "idle" 0 0 0 0 0 0 ""
     store_radio
     render_bundle >/dev/null 2>&1 || true
@@ -627,7 +699,7 @@ expire_capture_if_needed() {
   now="$(now_s)"
   end="$(cat "$END_FILE" 2>/dev/null || echo 0)"
   [ "$end" -gt 0 ] 2>/dev/null || return 0
-  [ "$now" -lt "$end" ] && return 0
+  [ "$now" -lt $((end + 60)) ] && return 0
   pid="$(cat "$PID_FILE" 2>/dev/null || true)"
   [ -n "$pid" ] && kill "$pid" 2>/dev/null || true
   sleep 1
@@ -640,7 +712,11 @@ expire_capture_if_needed() {
 capture_status_cmd() {
   expire_capture_if_needed
   cleanup_stale
-  local running="false" now end exists="false" bytes
+  local running="false" now end exists="false" bytes waited=0
+  while running_pid && [ "$(session_num frames_captured 0)" -eq 0 ] 2>/dev/null && [ "$waited" -lt 30 ]; do
+    sleep 1
+    waited=$((waited + 1))
+  done
   running_pid && running="true"
   now="$(now_s)"
   end="$(cat "$END_FILE" 2>/dev/null || echo 0)"
@@ -675,9 +751,9 @@ JSON
 }
 
 update_products_from_frame() {
-  local ts="$1" radio="$2" frame="$3" ui_bins="$4"
-  local min_dbm max_dbm freq_valid freq1 width noise rssi bins_csv norm_csv
-  local rf rw x0 x1 wf_row ring_max wf_rows
+  local ts="$1" radio="$2" frame="$3" ui_bins="$4" raw_bytes="${5:-0}" parser_exit="${6:-0}" frames_captured="${7:-0}"
+  local min_dbm max_dbm freq_valid freq1 width noise rssi bins_csv norm_csv bins_count norm_count
+  local rf rw x0 x1 wf_row ring_max wf_rows frame_bytes waterfall_count ambient_count
 
   min_dbm="$(cfg_get min_dbm "$DEFAULT_MIN_DBM")"
   max_dbm="$(cfg_get max_dbm "$DEFAULT_MAX_DBM")"
@@ -686,14 +762,24 @@ update_products_from_frame() {
   [ "$ring_max" -gt 2 ] 2>/dev/null || ring_max="$DEFAULT_RING_FRAMES"
   [ "$wf_rows" -gt 2 ] 2>/dev/null || wf_rows="$DEFAULT_WATERFALL_ROWS"
 
+  frame_bytes="$(printf '%s' "$frame" | wc -c | awk '{print int($1)}')"
   freq_valid="$(extract_json_bool "$frame" freq_valid)"
   freq1="$(extract_json_number "$frame" freq1_mhz)"
   width="$(extract_json_number "$frame" width_mhz)"
   noise="$(extract_json_number "$frame" noise)"
   rssi="$(extract_json_number "$frame" rssi)"
   bins_csv="$(extract_bins_csv "$frame")"
+  bins_count="$(count_csv_fields "$bins_csv")"
+  if [ -z "$bins_csv" ] || [ "$bins_count" -le 0 ] 2>/dev/null; then
+    write_pipeline_status "$raw_bytes" "$parser_exit" true "$frame_bytes" false 0 false 0 "$(count_json_rows_file "$WATERFALL_FILE")" "$(ambient_row_count)" "$frames_captured" "bins extraction failed"
+    return 1
+  fi
   norm_csv="$(normalize_bins_dbm_csv "$bins_csv" "$ui_bins" "$noise" "$min_dbm" "$max_dbm")"
-  [ -n "$norm_csv" ] || norm_csv=""
+  norm_count="$(count_csv_fields "$norm_csv")"
+  if [ -z "$norm_csv" ] || [ "$norm_count" -le 0 ] 2>/dev/null; then
+    write_pipeline_status "$raw_bytes" "$parser_exit" true "$frame_bytes" true 0 false 0 "$(count_json_rows_file "$WATERFALL_FILE")" "$(ambient_row_count)" "$frames_captured" "bins normalization failed"
+    return 1
+  fi
 
   cat > "$FRAME_FILE" <<JSON
 {"timestamp":$ts,"radio":$radio,"frame":{"freq_valid":$freq_valid,"freq1_mhz":$freq1,"width_mhz":$width,"noise":$noise,"rssi":$rssi,"bins":[${norm_csv}]}}
@@ -715,6 +801,10 @@ JSON
   wf_row="{\"timestamp\":$ts,\"bins\":[${norm_csv}]}"
   append_capped "$WATERFALL_FILE" "$wf_row" "$wf_rows"
   update_ambient "$ts" "$norm_csv"
+  waterfall_count="$(count_json_rows_file "$WATERFALL_FILE")"
+  ambient_count="$(ambient_row_count)"
+  write_pipeline_status "$raw_bytes" "$parser_exit" true "$frame_bytes" true "$norm_count" true "$norm_count" "$waterfall_count" "$ambient_count" "$frames_captured" ""
+  return 0
 }
 
 capture_worker() {
@@ -723,6 +813,7 @@ capture_worker() {
   parser="/usr/lib/rfeye/rfeye-spectral-parse"
   ath="$(ath_dir "$phy")"
   scan0="$ath/spectral_scan0"
+  start_ts="$(now_s)"
 
   finish_worker() {
     local final_state started
@@ -736,7 +827,8 @@ capture_worker() {
     store_radio
     render_bundle >/dev/null 2>&1 || true
   }
-  trap 'finish_worker; exit 0' INT TERM HUP EXIT
+  trap 'finish_worker; exit 0' INT TERM EXIT
+  trap '' HUP
 
   if [ ! -f "$scan0" ] || [ ! -x "$parser" ]; then
     err="unsupported spectral path"
@@ -746,21 +838,21 @@ capture_worker() {
 
   case "$bins" in 64|128|256) ;; *) bins="$DEFAULT_BINS" ;; esac
   [ "$snap_bytes" -gt 0 ] 2>/dev/null || snap_bytes="$DEFAULT_SNAPSHOT_BYTES"
-  [ "$snap_bytes" -lt 65536 ] 2>/dev/null && snap_bytes=65536
+  [ "$snap_bytes" -lt 16384 ] 2>/dev/null && snap_bytes=16384
+  [ "$snap_bytes" -gt 16384 ] 2>/dev/null && snap_bytes=16384
   [ "$snap_bytes" -gt "$max_bytes" ] && snap_bytes="$max_bytes"
   [ "$ui_bins" -gt 15 ] 2>/dev/null || ui_bins="$DEFAULT_UI_BINS"
 
-  start_ts="$(now_s)"
-  end_ts=$((start_ts + seconds))
   interval_s="$(sleep_interval_ms "$interval_ms")"
   frames=0
   bytes=0
   nof=0
   latest=0
 
-  write_session "running" "$start_ts" "$end_ts" "$frames" "$bytes" "$latest" "$nof" ""
   store_radio
-  render_bundle >/dev/null 2>&1 || true
+  start_ts="$(now_s)"
+  end_ts=$((start_ts + seconds))
+  write_session "running" "$start_ts" "$end_ts" "$frames" "$bytes" "$latest" "$nof" ""
 
   while true; do
     now="$(now_s)"
@@ -782,11 +874,16 @@ capture_worker() {
       frames=$((frames + 1))
       latest="$(now_s)"
       err=""
-      update_products_from_frame "$latest" "$radio" "$frame" "$ui_bins"
-      write_session "running" "$start_ts" "$end_ts" "$frames" "$bytes" "$latest" "$nof" "$err"
+      if update_products_from_frame "$latest" "$radio" "$frame" "$ui_bins" "$cycle_bytes" 0 "$frames"; then
+        write_session "running" "$start_ts" "$end_ts" "$frames" "$bytes" "$latest" "$nof" "$err"
+      else
+        err="product update failed"
+        write_session "running" "$start_ts" "$end_ts" "$frames" "$bytes" "$latest" "$nof" "$err"
+      fi
     else
       nof=$((nof + 1))
       err="no parsed frames"
+      write_pipeline_status "$(file_size "$CAPTURE_FILE")" 0 false 0 false 0 false 0 "$(count_json_rows_file "$WATERFALL_FILE")" "$(ambient_row_count)" "$frames" "$err"
       write_session "running" "$start_ts" "$end_ts" "$frames" "$bytes" "$latest" "$nof" "$err"
     fi
 
@@ -794,7 +891,8 @@ capture_worker() {
     sleep "$interval_s"
   done
 
-  trap - INT TERM HUP EXIT
+  trap - INT TERM EXIT
+  trap - HUP
   finish_worker
 }
 
@@ -827,8 +925,10 @@ start_cmd() {
   mkdir -p "$STATE_DIR"
   echo 0 > "$BYTES_FILE" 2>/dev/null || true
 
-  ( capture_worker "$phy" "$seconds" "$req_bins" "$max_bytes" "$snap_bytes" "$interval_ms" "$ui_bins" ) &
+  trap '' HUP
+  "$0" __capture_worker "$phy" "$seconds" "$req_bins" "$max_bytes" "$snap_bytes" "$interval_ms" "$ui_bins" > "$STATE_DIR/capture-worker.log" 2>&1 &
   local pid=$!
+  trap - HUP
   echo "$pid" > "$PID_FILE"
   echo $(( $(now_s) + seconds )) > "$END_FILE"
 
@@ -864,7 +964,8 @@ reset_cmd() {
   local phy="${1:-$(resolve_phy)}"
   scan_disable "$phy"
   if ! running_pid; then
-    rm -f "$PID_FILE" "$END_FILE" "$CAPTURE_TMP" "$CAPTURE_FILE" "$BYTES_FILE" "$FRAME_FILE" "$FRAME_RAW_FILE" "$RING_FILE" "$WAVEFORM_FILE" "$WATERFALL_FILE" "$AMBIENT_FILE" "$AMBIENT_WORK_FILE" "$BUNDLE_FILE"
+    rm -f "$PID_FILE" "$END_FILE" "$CAPTURE_TMP" "$CAPTURE_FILE" "$BYTES_FILE" "$FRAME_FILE" "$FRAME_RAW_FILE" "$RING_FILE" "$WAVEFORM_FILE" "$WATERFALL_FILE" "$AMBIENT_FILE" "$AMBIENT_WORK_FILE" "$BUNDLE_FILE" "$PIPELINE_STATUS_FILE"
+    remove_stale_lock
     write_session "idle" 0 0 0 0 0 0 ""
   fi
   store_radio
@@ -900,7 +1001,7 @@ snapshot_cmd() {
   if [ -n "$frame" ]; then
     local ts
     ts="$(now_s)"
-    update_products_from_frame "$ts" "$r" "$frame" "$(cfg_get ui_bins "$DEFAULT_UI_BINS")"
+    update_products_from_frame "$ts" "$r" "$frame" "$(cfg_get ui_bins "$DEFAULT_UI_BINS")" "$(file_size "$CAPTURE_FILE")" 0 1
     write_session "complete" "$ts" "$ts" 1 "$(file_size "$CAPTURE_FILE")" "$ts" 0 ""
     render_bundle >/dev/null 2>&1 || true
     echo "{\"ok\":true,\"radio\":$r,\"frame\":$frame,\"diagnostics\":{\"from_buffer\":false,\"bytes_read\":$(file_size "$CAPTURE_FILE"),\"spectral_ctl_after\":\"$(json_escape "$(spectral_ctl_value "$phy")")\"}}"
@@ -933,12 +1034,78 @@ waterfall_cmd() {
 
 ambient_cmd() {
   cleanup_stale
-  echo "{\"ok\":true,\"ambient\":{\"rows\":$(ambient_rows_json),\"mode\":\"minute_peak\"}}"
+  echo "{\"ok\":true,\"ambient\":{\"rows\":$(ambient_rows_json),\"mode\":\"minute_peak\",\"pending\":$(ambient_pending_bool),\"current\":$(ambient_current_json)}}"
 }
 
 heatmap_bundle_cmd() {
   cleanup_stale
   render_bundle
+}
+
+pipeline_test_cmd() {
+  cleanup_stale
+  if running_pid; then
+    echo '{"ok":false,"error":"capture already running"}'
+    return 1
+  fi
+  local ui_bins="${1:-$(cfg_get ui_bins "$DEFAULT_UI_BINS")}" phy="${2:-$(resolve_phy)}" bins parser snap_bytes raw_out parser_out stats_out frame r ts raw_bytes parser_exit frames_emitted truncated stage_capture=false stage_parse=false stage_bins=false stage_normalize=false stage_latest=false stage_waveform=false stage_waterfall=false stage_ambient=false stage_bundle=false last_error=""
+  case "$ui_bins" in ''|*[!0-9]*) ui_bins="$DEFAULT_UI_BINS" ;; esac
+  [ "$ui_bins" -gt 15 ] 2>/dev/null || ui_bins="$DEFAULT_UI_BINS"
+  bins="$ui_bins"
+  case "$bins" in 64|128|256) ;; *) bins="$DEFAULT_BINS" ;; esac
+  parser="/usr/lib/rfeye/rfeye-spectral-parse"
+  snap_bytes="$(cfg_get max_capture_bytes "$DEFAULT_MAX_CAPTURE_BYTES")"
+  [ "$snap_bytes" -lt 65536 ] 2>/dev/null && snap_bytes=65536
+  raw_out="$CAPTURE_FILE"
+  parser_out="$FRAME_RAW_FILE"
+  stats_out="$STATE_DIR/latest_parser_stats.json"
+
+  if acquire_lock; then
+    frame="$(capture_cycle_sequence "$phy" "$bins" "$snap_bytes" "$parser" "$raw_out" "$parser_out" "$stats_out" "known-good" 1 2>/dev/null)"
+    parser_exit=$?
+    release_lock
+  else
+    frame=""
+    parser_exit=1
+    last_error="capture busy"
+  fi
+  raw_bytes="$(file_size "$raw_out")"
+  [ "$raw_bytes" -gt 0 ] 2>/dev/null && stage_capture=true
+  [ -n "$frame" ] && stage_parse=true
+  frames_emitted="$(sed -n 's/.*"frames_emitted":\([0-9][0-9]*\).*/\1/p' "$stats_out" 2>/dev/null | head -n1)"
+  truncated="$(sed -n 's/.*"trailing_truncated":\(true\|false\).*/\1/p' "$stats_out" 2>/dev/null | head -n1)"
+  [ -n "$frames_emitted" ] || frames_emitted=0
+  [ -n "$truncated" ] || truncated=false
+  r="$(radio_info_safe)"
+  printf '%s
+' "$r" > "$RADIO_FILE"
+  ts="$(now_s)"
+  if [ -n "$frame" ]; then
+    local bins_csv norm_csv bins_count norm_count
+    bins_csv="$(extract_bins_csv "$frame")"
+    bins_count="$(count_csv_fields "$bins_csv")"
+    [ "$bins_count" -gt 0 ] 2>/dev/null && stage_bins=true
+    norm_csv="$(normalize_bins_dbm_csv "$bins_csv" "$ui_bins" "$(extract_json_number "$frame" noise)" "$(cfg_get min_dbm "$DEFAULT_MIN_DBM")" "$(cfg_get max_dbm "$DEFAULT_MAX_DBM")")"
+    norm_count="$(count_csv_fields "$norm_csv")"
+    [ "$norm_count" -gt 0 ] 2>/dev/null && stage_normalize=true
+    if update_products_from_frame "$ts" "$r" "$frame" "$ui_bins" "$raw_bytes" "$parser_exit" 1; then
+      stage_latest=$( [ -s "$FRAME_FILE" ] && echo true || echo false )
+      stage_waveform=$( [ -s "$WAVEFORM_FILE" ] && echo true || echo false )
+      stage_waterfall=$( [ "$(count_json_rows_file "$WATERFALL_FILE")" -ge 1 ] 2>/dev/null && echo true || echo false )
+      stage_ambient=$( [ "$(ambient_row_count)" -ge 1 ] 2>/dev/null && echo true || echo false )
+      write_session "complete" "$ts" "$ts" 1 "$raw_bytes" "$ts" 0 ""
+    else
+      last_error="$(sed -n 's/.*"last_error":"\([^"]*\)".*/\1/p' "$PIPELINE_STATUS_FILE" 2>/dev/null | head -n1)"
+      write_session "error" "$ts" "$ts" 0 "$raw_bytes" 0 1 "$last_error"
+    fi
+  else
+    [ -n "$last_error" ] || last_error="no parsed frames"
+    write_pipeline_status "$raw_bytes" "$parser_exit" false 0 false 0 false 0 "$(count_json_rows_file "$WATERFALL_FILE")" "$(ambient_row_count)" 0 "$last_error"
+    write_session "error" "$ts" "$ts" 0 "$raw_bytes" 0 1 "$last_error"
+  fi
+  render_bundle >/dev/null 2>&1 && stage_bundle=true || stage_bundle=false
+  echo "{\"ok\":$stage_waveform,\"raw_bytes\":$raw_bytes,\"parser_exit\":$parser_exit,\"parser_frame_present\":$stage_parse,\"frames_emitted\":$frames_emitted,\"trailing_truncated\":$truncated,\"stages\":{\"capture_raw_bytes\":$stage_capture,\"parse_resync\":$stage_parse,\"extract_bins\":$stage_bins,\"normalize_bins\":$stage_normalize,\"write_latest_frame\":$stage_latest,\"write_waveform\":$stage_waveform,\"append_waterfall\":$stage_waterfall,\"update_ambient\":$stage_ambient,\"render_heatmap_bundle\":$stage_bundle},\"pipeline\":$(pipeline_status_json)}"
+  [ "$stage_waveform" = true ] && [ "$stage_waterfall" = true ] && return 0 || return 1
 }
 
 acquisition_debug_cmd() {
@@ -1007,17 +1174,20 @@ case "$cmd" in
   waterfall) waterfall_cmd ;;
   ambient) ambient_cmd ;;
   heatmap_bundle) heatmap_bundle_cmd ;;
+  pipeline_status) pipeline_status_cmd ;;
+  pipeline_test) pipeline_test_cmd "$@" ;;
   acquisition_debug) acquisition_debug_cmd ;;
   raw_inspect) raw_inspect_cmd ;;
   parser_probe) parser_probe_cmd ;;
   raw_capture_test) raw_capture_test_cmd "$@" ;;
+  __capture_worker) capture_worker "$@" ;;
   reset) reset_cmd "${1:-$(resolve_phy)}" ;;
   start) start_cmd "$@" ;;
   stop) stop_cmd ;;
   snapshot) snapshot_cmd ;;
   daemon) daemon_cmd ;;
   *)
-    echo '{"ok":false,"error":"usage: rfeye-agent {status|capture_status|radio_info|ui_state|waveform|waterfall|ambient|heatmap_bundle|acquisition_debug|raw_inspect|parser_probe|raw_capture_test|reset|start [seconds bins phy]|stop|snapshot|daemon}"}'
+    echo '{"ok":false,"error":"usage: rfeye-agent {status|capture_status|radio_info|ui_state|waveform|waterfall|ambient|heatmap_bundle|pipeline_status|pipeline_test [ui_bins phy]|acquisition_debug|raw_inspect|parser_probe|raw_capture_test|reset|start [seconds bins phy]|stop|snapshot|daemon}"}'
     exit 2
     ;;
 esac

@@ -44,6 +44,12 @@ case "$ACTION" in
   heatmap_bundle)
     exec "$AGENT" heatmap_bundle
     ;;
+  pipeline_status)
+    exec "$AGENT" pipeline_status
+    ;;
+  pipeline_test)
+    exec "$AGENT" pipeline_test "${BINS_ARG:-128}" "${PHY_ARG:-phy0}"
+    ;;
   acquisition_debug)
     exec "$AGENT" acquisition_debug
     ;;
