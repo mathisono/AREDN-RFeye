@@ -1,5 +1,27 @@
 # RFeye IPK Build Notes
 
+## r5 build (2026-05-25 UTC)
+
+- Commit: `8fbc87f` (`rfeye: add acquisition diagnostics for r5`)
+- Package: `aredn-rfeye 0.1.0-r5`
+- IPK filename: `aredn-rfeye_0.1.0-r5_mips_24kc.ipk`
+- SHA256: `aa035d679660c027e8d0ea2e69d718feec73514743035a8a09e91633930eb124`
+- Build tree path: `/home/bill/src/build-sdk/openwrt-sdk-ath79-generic`
+- Build commands:
+  - `rsync -av --delete "/home/bill/src/AREDN-RFeye/package/aredn-rfeye/" "/home/bill/src/build-sdk/openwrt-sdk-ath79-generic/package/aredn-rfeye/"`
+  - `LD_LIBRARY_PATH=/home/bill/src/local-gawk/lib make package/aredn-rfeye/clean V=s`
+  - `LD_LIBRARY_PATH=/home/bill/src/local-gawk/lib make package/aredn-rfeye/compile V=s`
+- Validation results before build:
+  - `sh -n package/aredn-rfeye/files/usr/sbin/rfeye-agent` ✅
+  - `sh -n package/aredn-rfeye/files/usr/sbin/rfeye-survey` ✅
+  - `sh -n package/aredn-rfeye/files/www/cgi-bin/apps/rfeye/data/agent.sh` ✅
+  - `sh -n package/aredn-rfeye/files/www/cgi-bin/apps/rfeye/user` ✅
+  - `cc -Wall -Wextra -o /tmp/rfeye-spectral-parse src/rfeye_spectral_parse.c` ✅
+  - `sh scripts/test-parser-smoke.sh` ✅
+- Build issue diagnosed/fixed:
+  - SDK host `awk` symlink/runtime path mismatch caused metadata generation problems; using `LD_LIBRARY_PATH=/home/bill/src/local-gawk/lib` for SDK make calls restored build target generation.
+- Node retest: performed through jump host MSE-88, but r5 capture loop still returned zero parsed frames; diagnostics endpoints worked.
+
 ## r4 build (2026-05-25 UTC)
 
 - Commit: `511c9ab` (`rfeye: add reliable capture loop and heatmap bundle UI`)
