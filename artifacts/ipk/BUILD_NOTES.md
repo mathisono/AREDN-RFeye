@@ -1,21 +1,30 @@
 # RFeye IPK Build Notes
 
-- Date/time: 2026-05-19 16:28:34 UTC
-- Source repo: https://github.com/mathisono/AREDN-RFeye
-- Source commit before local build changes: c956cae Add OpenClaw ipk build task
-- Build tree: /home/bill/src/build-sdk/openwrt-sdk-ath79-generic
-- Build SDK: OpenWrt 24.10.0 ath79/generic SDK, gcc 13.3.0, musl
-- Target architecture: mips_24kc
-- Package filename: aredn-rfeye_0.1.0-r1_mips_24kc.ipk
-- Package size: 10441 bytes
-- SHA256: f775d31bf0589ad738e2d090b89b39d594bf183dd9970ccf9c488a8f863a8cac
-- Parser smoke test: passed via `bash scripts/test-parser-smoke.sh`
-- Node install test: not performed; no bench node was available in this build environment.
+## r4 build (2026-05-25 UTC)
+
+- Commit: `511c9ab` (`rfeye: add reliable capture loop and heatmap bundle UI`)
+- Package: `aredn-rfeye 0.1.0-r4`
+- IPK filename: `aredn-rfeye_0.1.0-r4_mips_24kc.ipk`
+- SHA256: `2489b5f37a23ae084770eb9cf11559617fabf218af3948625b8e26734a0aa577`
+- Build tree path: `/home/bill/src/build-sdk/openwrt-sdk-ath79-generic`
 - Build commands:
-  - `rsync -a --delete "/home/bill/src/AREDN-RFeye/package/aredn-rfeye/" "/home/bill/src/build-sdk/openwrt-sdk-ath79-generic/package/aredn-rfeye/"`
-  - `make package/aredn-rfeye/clean V=s`
-  - `make package/aredn-rfeye/compile V=s`
-- Notes/warnings:
-  - Local host had mawk only; GNU awk was extracted under `/home/bill/src/local-gawk` and prepended to PATH for the SDK build.
-  - The OpenWrt SDK emitted dependency metadata warnings for `iw` and `uhttpd` because the local SDK feed metadata did not include those packages. The built package control still declares `Depends: libc, iw, uhttpd`.
-  - Package Makefile was adjusted to skip copying optional `files/www/apps` when that directory is absent; this avoided packaging a missing optional app-assets directory.
+  - `rsync -av --delete "/home/bill/src/AREDN-RFeye/package/aredn-rfeye/" "/home/bill/src/build-sdk/openwrt-sdk-ath79-generic/package/aredn-rfeye/"`
+  - `LD_LIBRARY_PATH=/home/bill/src/local-gawk/lib make package/aredn-rfeye/clean V=s`
+  - `LD_LIBRARY_PATH=/home/bill/src/local-gawk/lib make package/aredn-rfeye/compile V=s`
+- Validation results before build:
+  - `sh -n package/aredn-rfeye/files/usr/sbin/rfeye-agent` ✅
+  - `sh -n package/aredn-rfeye/files/usr/sbin/rfeye-survey` ✅
+  - `sh -n package/aredn-rfeye/files/www/cgi-bin/apps/rfeye/data/agent.sh` ✅
+  - `sh -n package/aredn-rfeye/files/www/cgi-bin/apps/rfeye/user` ✅
+  - `cc -Wall -Wextra -o /tmp/rfeye-spectral-parse src/rfeye_spectral_parse.c` ✅
+  - `sh scripts/test-parser-smoke.sh` ✅
+- Build issue diagnosed/fixed:
+  - SDK host `awk` symlink was pointing to a local gawk without runtime library path, causing metadata generation failures and then `No rule to make target ...`.
+  - Setting `LD_LIBRARY_PATH=/home/bill/src/local-gawk/lib` for SDK make calls restored package metadata scanning and target generation.
+- Node retest completed: **No** (bench node unreachable at test time; SSH and HTTP timed out).
+
+## Prior artifacts
+
+- `aredn-rfeye_0.1.0-r1_mips_24kc.ipk`
+- `aredn-rfeye_0.1.0-r2_mips_24kc.ipk`
+- `aredn-rfeye_0.1.0-r3_mips_24kc.ipk`
