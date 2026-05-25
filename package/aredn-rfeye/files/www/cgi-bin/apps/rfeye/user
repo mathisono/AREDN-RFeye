@@ -65,6 +65,8 @@ cat <<'HTML'
         <button id="snapshot">One snapshot</button>
       </div>
       <div>Status: <span id="runstate" class="muted">idle</span></div>
+      <div>Capture: <span id="capturestate" class="muted">not started</span></div>
+      <div>Capture bytes: <span id="capturebytes">0</span></div>
       <div>Frames drawn: <span id="frames">0</span></div>
     </div>
 
@@ -172,10 +174,22 @@ cat <<'HTML'
     setState('receiving snapshot frames', true);
   }
 
+  async function pollCaptureStatus() {
+    const j = await getJson(qs('capture_status'));
+    const cap = document.getElementById('capturestate');
+    const bytes = document.getElementById('capturebytes');
+    bytes.textContent = String(j.latest_capture_bytes || j.tmp_capture_bytes || 0);
+    cap.textContent = j.running ? 'running' : (j.latest_capture_exists ? 'complete' : 'waiting for /tmp capture');
+    cap.className = j.running ? 'ok' : 'muted';
+    return j;
+  }
+
   async function pollSnapshot() {
+    const s = await pollCaptureStatus();
     const j = await getJson(qs('snapshot'));
     updateFrame(j);
-    if (timer && Date.now() > stopAt) await stopPull();
+    if (!j.ok && s.running) setState('capture running; waiting for snapshot frame', null);
+    if (timer && Date.now() > stopAt && !s.running) await stopPull();
   }
 
   async function updateUtilization() {
@@ -195,10 +209,11 @@ cat <<'HTML'
     framesEl.textContent = '0';
     setState('starting...', null);
     raw.textContent = JSON.stringify(await getJson(qs('start')), null, 2);
-    stopAt = Date.now() + seconds * 1000;
+    stopAt = Date.now() + seconds * 1000 + 3000;
     if (timer) clearInterval(timer);
     timer = setInterval(pollSnapshot, 1200);
-    pollSnapshot();
+    pollCaptureStatus();
+    setTimeout(pollSnapshot, 1200);
     updateUtilization();
   }
 
@@ -206,6 +221,7 @@ cat <<'HTML'
     if (timer) clearInterval(timer);
     timer = null;
     raw.textContent = JSON.stringify(await getJson(qs('stop')), null, 2);
+    await pollCaptureStatus();
     setState('stopped', null);
   }
 

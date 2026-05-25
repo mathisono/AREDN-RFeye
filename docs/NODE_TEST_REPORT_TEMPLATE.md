@@ -80,6 +80,7 @@ Command:
 ```sh
 /usr/sbin/rfeye-agent start 5 128 phy0
 sleep 6
+/usr/sbin/rfeye-agent capture_status
 ls -lh /tmp/rfeye/latest.tlv
 ```
 
@@ -112,6 +113,8 @@ curl 'http://localnode.local.mesh/cgi-bin/apps/rfeye/data/agent.sh?action=status
 curl 'http://localnode.local.mesh/cgi-bin/apps/rfeye/data/agent.sh?action=survey'
 curl 'http://localnode.local.mesh/cgi-bin/apps/rfeye/data/agent.sh?action=utilization'
 curl 'http://localnode.local.mesh/cgi-bin/apps/rfeye/data/agent.sh?action=snapshot'
+curl 'http://localnode.local.mesh/cgi-bin/apps/rfeye/data/agent.sh?action=capture_status'
+curl 'http://localnode.local.mesh/cgi-bin/apps/rfeye/data/agent.sh?action=survey_raw'
 ```
 
 Results:

@@ -18,11 +18,13 @@ static uint64_t be64(const uint8_t *p) {
 
 static void usage(const char *argv0) {
   fprintf(stderr,
-          "Usage: %s [--input FILE] [--phy NAME] [--limit N] [--bins N]\n"
+          "Usage: %s [--input FILE] [--phy NAME] [--limit N] [--bins N] [--debug] [--stats]\n"
           "  --input FILE : TLV stream file (default: stdin)\n"
           "  --phy NAME   : phy label in JSON (default: phy0)\n"
           "  --limit N    : max frames to emit (default: unlimited)\n"
-          "  --bins N     : max bins to emit per frame (default: all)\n",
+          "  --bins N     : max bins to emit per frame (default: all)\n"
+          "  --debug      : print parser warnings to stderr\n"
+          "  --stats      : print parse stats JSON to stderr\n",
           argv0);
 }
 
@@ -31,6 +33,9 @@ int main(int argc, char **argv) {
   const char *phy = "phy0";
   long limit = -1;
   long bins_limit = -1;
+  int debug = 0;
+  int stats = 0;
+  int trailing_truncated = 0;
 
   for (int i = 1; i < argc; i++) {
     if (!strcmp(argv[i], "--input") && i + 1 < argc) {
@@ -41,6 +46,10 @@ int main(int argc, char **argv) {
       limit = strtol(argv[++i], NULL, 10);
     } else if (!strcmp(argv[i], "--bins") && i + 1 < argc) {
       bins_limit = strtol(argv[++i], NULL, 10);
+    } else if (!strcmp(argv[i], "--debug")) {
+      debug = 1;
+    } else if (!strcmp(argv[i], "--stats")) {
+      stats = 1;
     } else if (!strcmp(argv[i], "-h") || !strcmp(argv[i], "--help")) {
       usage(argv[0]);
       return 0;
@@ -65,7 +74,8 @@ int main(int argc, char **argv) {
     size_t n = fread(tlv, 1, 3, fp);
     if (n == 0) break;
     if (n < 3) {
-      fprintf(stderr, "truncated TLV header\n");
+      trailing_truncated = 1;
+      if (debug || emitted == 0) fprintf(stderr, "truncated TLV header\n");
       break;
     }
 
@@ -78,7 +88,8 @@ int main(int argc, char **argv) {
     }
 
     if (fread(buf, 1, len, fp) != len) {
-      fprintf(stderr, "truncated TLV payload\n");
+      trailing_truncated = 1;
+      if (debug || emitted == 0) fprintf(stderr, "truncated TLV payload\n");
       free(buf);
       break;
     }
@@ -126,6 +137,10 @@ int main(int argc, char **argv) {
   }
 
   if (fp != stdin) fclose(fp);
-  return 0;
+  if (stats) {
+    fprintf(stderr, "{\"frames_emitted\":%ld,\"trailing_truncated\":%s}\n", emitted, trailing_truncated ? "true" : "false");
+  }
+  if (emitted > 0) return 0;
+  return trailing_truncated ? 1 : 0;
 }
 

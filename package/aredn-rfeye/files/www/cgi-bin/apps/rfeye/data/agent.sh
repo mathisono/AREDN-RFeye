@@ -23,6 +23,9 @@ case "$ACTION" in
   status)
     exec "$AGENT" status
     ;;
+  capture_status)
+    exec "$AGENT" capture_status
+    ;;
   start)
     exec "$AGENT" start "${SECONDS_ARG:-10}" "${BINS_ARG:-128}" "${PHY_ARG:-phy0}"
     ;;
@@ -34,6 +37,9 @@ case "$ACTION" in
     ;;
   survey)
     exec "$SURVEY" survey "${PHY_ARG:-}"
+    ;;
+  survey_raw|raw)
+    exec "$SURVEY" raw "${PHY_ARG:-}"
     ;;
   utilization|survey_delta)
     exec "$SURVEY" utilization "${PHY_ARG:-}"

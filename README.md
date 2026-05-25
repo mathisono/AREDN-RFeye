@@ -22,6 +22,14 @@ The node package now includes:
 - Capture runtime and byte count are capped.
 - Unsupported hardware must return clear JSON errors.
 
+## Current field-test limitations
+
+First bench-node testing on `KJ6DZB-WSB-ACdish5` showed the core ath10k spectral path works, but some node/driver counters need defensive handling:
+
+- Survey counters may be zero or unchanged on some ath10k/IBSS nodes; `rfeye-survey` returns clean diagnostic JSON in that case.
+- CGI snapshot timing is still under test; failures should return diagnostic JSON rather than a bare `no frame`.
+- A 10-second capture succeeded on the first tested node and produced `/tmp/rfeye/latest.tlv`; shorter captures may need polling via `capture_status` before assuming the file exists.
+
 ## Local parser test
 
 ```sh
@@ -70,6 +78,8 @@ Manual checks before enabling service:
 /usr/sbin/rfeye-survey survey
 /usr/sbin/rfeye-survey utilization
 /usr/sbin/rfeye-agent snapshot
+/usr/sbin/rfeye-agent capture_status
+/usr/sbin/rfeye-survey raw
 ```
 
 Optional service enable:
@@ -105,6 +115,8 @@ curl 'http://localnode.local.mesh/cgi-bin/apps/rfeye/data/agent.sh?action=status
 curl 'http://localnode.local.mesh/cgi-bin/apps/rfeye/data/agent.sh?action=survey'
 curl 'http://localnode.local.mesh/cgi-bin/apps/rfeye/data/agent.sh?action=utilization'
 curl 'http://localnode.local.mesh/cgi-bin/apps/rfeye/data/agent.sh?action=snapshot'
+curl 'http://localnode.local.mesh/cgi-bin/apps/rfeye/data/agent.sh?action=capture_status'
+curl 'http://localnode.local.mesh/cgi-bin/apps/rfeye/data/agent.sh?action=survey_raw'
 curl 'http://localnode.local.mesh/cgi-bin/apps/rfeye/data/agent.sh?action=start&seconds=5&bins=128&phy=phy0'
 curl 'http://localnode.local.mesh/cgi-bin/apps/rfeye/data/agent.sh?action=stop'
 ```
@@ -124,3 +136,4 @@ More detailed instructions are in:
 - `docs/BUILD_AND_NODE_TEST.md`
 - `docs/OPENCLAW_IPK_TASK.md`
 - `docs/NODE_TEST_REPORT_TEMPLATE.md`
+- `docs/TEST_RESULTS_KJ6DZB_WSB_ACDISH5.md`
