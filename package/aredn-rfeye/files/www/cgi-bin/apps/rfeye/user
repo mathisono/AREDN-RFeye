@@ -1,5 +1,5 @@
 #!/bin/sh
-# AREDN RFeye lightweight node GUI
+# AREDN RFeye heatmap-oriented node GUI
 
 echo "Content-Type: text/html"
 echo "Cache-Control: no-store"
@@ -17,15 +17,17 @@ cat <<'HTML'
   <link rel="stylesheet" href="/a/css/mobile.css">
   <style>
     body { margin: 1rem; font-family: system-ui, sans-serif; }
-    .rfeye-wrap { max-width: 980px; margin: 0 auto; }
-    .rfeye-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: .75rem; }
+    .rfeye-wrap { max-width: 1100px; margin: 0 auto; }
+    .rfeye-grid { display: grid; grid-template-columns: repeat(auto-fit,minmax(220px,1fr)); gap: .75rem; }
     .rfeye-card { border: 1px solid rgba(127,127,127,.35); border-radius: .6rem; padding: .75rem; background: rgba(127,127,127,.06); }
     .rfeye-row { display: flex; flex-wrap: wrap; gap: .5rem; align-items: end; margin: .5rem 0; }
     label { display: grid; gap: .2rem; font-size: .9rem; }
     input, select, button { font: inherit; padding: .35rem .5rem; }
     button { cursor: pointer; }
-    canvas { width: 100%; height: 260px; border: 1px solid rgba(127,127,127,.35); border-radius: .5rem; background: #05070a; }
-    pre { overflow: auto; max-height: 14rem; padding: .5rem; background: rgba(0,0,0,.12); border-radius: .4rem; }
+    canvas { width: 100%; border: 1px solid rgba(127,127,127,.35); border-radius: .5rem; background: #05070a; }
+    #waveform { height: 220px; }
+    #waterfall, #ambient { height: 160px; }
+    pre { overflow: auto; max-height: 10rem; padding: .5rem; background: rgba(0,0,0,.12); border-radius: .4rem; }
     .ok { color: #15803d; font-weight: 700; }
     .bad { color: #b91c1c; font-weight: 700; }
     .muted { opacity: .75; }
@@ -35,63 +37,59 @@ cat <<'HTML'
 <body>
 <div class="rfeye-wrap">
   <h2>AREDN RFeye</h2>
-  <p class="muted">Node-side FFT test view. Current-channel only; not a calibrated spectrum analyzer.</p>
+  <p class="muted">Node-side test tool. Current channel only. Not a calibrated spectrum analyzer.</p>
 
   <div class="rfeye-card warn">
-    <b>Testing mode:</b> captures are time-limited and stored in <code>/tmp</code>. Do not enable channel hopping on a production mesh node.
+    <b>Safety:</b> No channel hopping or channel changes. Capture data remains under <code>/tmp/rfeye</code>.
   </div>
 
   <div class="rfeye-grid">
     <div class="rfeye-card">
       <h3>Controls</h3>
       <div class="rfeye-row">
-        <label>PHY
-          <input id="phy" value="phy0" autocomplete="off">
-        </label>
+        <label>PHY <input id="phy" value="phy0" autocomplete="off"></label>
         <label>Bins
-          <select id="bins">
-            <option>64</option>
-            <option selected>128</option>
-            <option>256</option>
-          </select>
+          <select id="bins"><option>64</option><option selected>128</option><option>256</option></select>
         </label>
-        <label>Test length, seconds
-          <input id="seconds" type="number" min="1" max="20" value="10">
-        </label>
+        <label>Test length (s) <input id="seconds" type="number" min="1" max="20" value="10"></label>
       </div>
       <div class="rfeye-row">
-        <button id="start">Start data pull</button>
+        <button id="start">Start</button>
         <button id="stop">Stop</button>
-        <button id="snapshot">One snapshot</button>
+        <button id="reset">Reset</button>
       </div>
-      <div>Status: <span id="runstate" class="muted">idle</span></div>
-      <div>Capture: <span id="capturestate" class="muted">not started</span></div>
-      <div>Capture bytes: <span id="capturebytes">0</span></div>
-      <div>Frames drawn: <span id="frames">0</span></div>
+      <div>State: <b id="state" class="muted">idle</b></div>
+      <div>Frames captured: <b id="frames">0</b></div>
+      <div>No-frame count: <b id="noframes">0</b></div>
+      <div>Capture bytes: <b id="bytes">0</b></div>
     </div>
 
     <div class="rfeye-card">
-      <h3>Channel utilization</h3>
-      <div>Total: <b id="u-total">--</b></div>
-      <div>TX: <b id="u-tx">--</b></div>
-      <div>RX: <b id="u-rx">--</b></div>
-      <div>External busy: <b id="u-ext">--</b></div>
-      <div>Noise: <b id="noise">--</b></div>
+      <h3>Radio (trusted)</h3>
+      <div>Freq: <b id="rfreq">--</b></div>
+      <div>Channel: <b id="rchan">--</b></div>
+      <div>Width: <b id="rwidth">--</b></div>
+      <div>Mode: <b id="rmode">--</b></div>
+      <div>Capture end: <b id="rend">--</b></div>
     </div>
 
     <div class="rfeye-card">
-      <h3>Snapshot info</h3>
-      <div>Radio freq: <b id="radiofreq">--</b></div>
-      <div>Channel: <b id="radiochan">--</b></div>
-      <div>Width: <b id="radiowidth">--</b></div>
-      <div class="muted">Frame freq: <b id="framefreq">--</b></div>
-      <div>RSSI: <b id="rssi">--</b></div>
-      <div>Max bin: <b id="maxbin">--</b></div>
+      <h3>Diagnostics</h3>
+      <div>Waveform range: <b id="wrange">--</b></div>
+      <div>Waterfall rows: <b id="wfrows">0</b></div>
+      <div>Ambient rows: <b id="amrows">0</b></div>
+      <div>Ambient mode: <b id="ammode">minute_peak</b></div>
     </div>
   </div>
 
-  <h3>Current FFT</h3>
-  <canvas id="fft" width="960" height="260"></canvas>
+  <h3>Waveform View</h3>
+  <canvas id="waveform" width="1040" height="220"></canvas>
+
+  <h3>Waterfall View</h3>
+  <canvas id="waterfall" width="1040" height="160"></canvas>
+
+  <h3>Ambient Noise Level</h3>
+  <canvas id="ambient" width="1040" height="160"></canvas>
 
   <h3>Raw JSON</h3>
   <pre id="raw">Waiting for data...</pre>
@@ -100,31 +98,16 @@ cat <<'HTML'
 <script>
 (function () {
   const api = '/cgi-bin/apps/rfeye/data/agent.sh';
-  const canvas = document.getElementById('fft');
-  const ctx = canvas.getContext('2d');
   const raw = document.getElementById('raw');
-  const state = document.getElementById('runstate');
-  const framesEl = document.getElementById('frames');
-  let timer = null;
-  let stopAt = 0;
-  let frames = 0;
-  let radioInfo = null;
+  const waveform = document.getElementById('waveform').getContext('2d');
+  const waterfall = document.getElementById('waterfall').getContext('2d');
+  const ambient = document.getElementById('ambient').getContext('2d');
 
   function qs(action) {
     const phy = encodeURIComponent(document.getElementById('phy').value || 'phy0');
     const bins = encodeURIComponent(document.getElementById('bins').value || '128');
     const seconds = encodeURIComponent(document.getElementById('seconds').value || '10');
     return `${api}?action=${action}&phy=${phy}&bins=${bins}&seconds=${seconds}`;
-  }
-
-  function setState(txt, good) {
-    state.textContent = txt;
-    state.className = good === true ? 'ok' : good === false ? 'bad' : 'muted';
-  }
-
-  function pct(v) {
-    if (typeof v !== 'number' || !isFinite(v)) return '--';
-    return `${Math.round(v * 100)}%`;
   }
 
   async function getJson(url) {
@@ -134,136 +117,130 @@ cat <<'HTML'
     catch (e) { return { ok: false, error: 'invalid json', body: t }; }
   }
 
-  function drawFFT(bins) {
-    const w = canvas.width;
-    const h = canvas.height;
-    ctx.clearRect(0, 0, w, h);
-    ctx.fillStyle = '#05070a';
-    ctx.fillRect(0, 0, w, h);
-    ctx.strokeStyle = '#1f2937';
-    ctx.lineWidth = 1;
+  function setState(txt, good) {
+    const el = document.getElementById('state');
+    el.textContent = txt;
+    el.className = good === true ? 'ok' : good === false ? 'bad' : 'muted';
+  }
+
+  function powerColor(v, minv, maxv) {
+    if (!Number.isFinite(v)) return 'rgb(5,7,10)';
+    const t = Math.max(0, Math.min(1, (v - minv) / (maxv - minv || 1)));
+    if (t < 0.33) {
+      const k = t / 0.33;
+      return `rgb(${Math.round(0)},${Math.round(120*k)},${Math.round(220 + 35*k)})`;
+    }
+    if (t < 0.66) {
+      const k = (t - 0.33) / 0.33;
+      return `rgb(${Math.round(20 + 220*k)},${Math.round(120 + 90*k)},${Math.round(255 - 180*k)})`;
+    }
+    const k = (t - 0.66) / 0.34;
+    return `rgb(${Math.round(240 + 15*k)},${Math.round(210 - 140*k)},${Math.round(70 - 60*k)})`;
+  }
+
+  function drawWaveform(w) {
+    const c = waveform.canvas;
+    const bins = (w && w.bins) || [];
+    waveform.fillStyle = '#05070a';
+    waveform.fillRect(0, 0, c.width, c.height);
+    waveform.strokeStyle = '#1f2937';
     for (let i = 1; i < 5; i++) {
-      const y = Math.round((h / 5) * i);
-      ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(w, y); ctx.stroke();
+      const y = Math.round((c.height / 5) * i);
+      waveform.beginPath(); waveform.moveTo(0, y); waveform.lineTo(c.width, y); waveform.stroke();
     }
-    if (!bins || !bins.length) return;
-    let max = 1;
-    for (const v of bins) if (v > max) max = v;
-    ctx.strokeStyle = '#22d3ee';
-    ctx.lineWidth = 2;
-    ctx.beginPath();
+    if (!bins.length) return;
+    let minv = Infinity, maxv = -Infinity;
+    for (const v of bins) { if (v < minv) minv = v; if (v > maxv) maxv = v; }
+    if (!isFinite(minv) || !isFinite(maxv) || minv === maxv) { minv = -125; maxv = -65; }
+    waveform.strokeStyle = '#22d3ee';
+    waveform.lineWidth = 2;
+    waveform.beginPath();
     bins.forEach((v, i) => {
-      const x = bins.length === 1 ? 0 : (i / (bins.length - 1)) * w;
-      const y = h - ((v / max) * (h - 18)) - 8;
-      if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+      const x = bins.length === 1 ? 0 : (i / (bins.length - 1)) * c.width;
+      const y = c.height - ((v - minv) / (maxv - minv || 1)) * (c.height - 16) - 8;
+      if (i === 0) waveform.moveTo(x, y); else waveform.lineTo(x, y);
     });
-    ctx.stroke();
+    waveform.stroke();
   }
 
-  function frameFreqValid(f) {
-    const v = Number(f && f.freq1_mhz);
-    if (!Number.isFinite(v) || v < 2300 || v > 7100) return false;
-    if (f && f.freq_valid === false) return false;
-    const w = Number(f && f.width_mhz);
-    if (Number.isFinite(w) && w > 0 && ![20, 40, 80, 160].includes(w)) return false;
-    return true;
+  function drawHeat(ctx, rows, minv, maxv) {
+    const c = ctx.canvas;
+    ctx.fillStyle = '#05070a';
+    ctx.fillRect(0, 0, c.width, c.height);
+    if (!rows || !rows.length) return;
+    const bins = ((rows[0] && rows[0].bins) || []).length;
+    if (!bins) return;
+    const cellW = c.width / bins;
+    const cellH = c.height / rows.length;
+    rows.forEach((row, r) => {
+      const arr = row.bins || [];
+      for (let i = 0; i < bins; i++) {
+        ctx.fillStyle = powerColor(arr[i], minv, maxv);
+        ctx.fillRect(i * cellW, c.height - ((r + 1) * cellH), Math.ceil(cellW), Math.ceil(cellH));
+      }
+    });
   }
 
-  function applyRadioInfo(r) {
-    if (r && r.ok) {
-      radioInfo = r;
-      document.getElementById('radiofreq').textContent = r.frequency_mhz ? `${r.frequency_mhz} MHz` : '--';
-      document.getElementById('radiochan').textContent = r.channel || '--';
-      document.getElementById('radiowidth').textContent = r.width_mhz ? `${r.width_mhz} MHz` : '--';
-    } else {
-      document.getElementById('radiofreq').textContent = 'unavailable';
-      document.getElementById('radiochan').textContent = '--';
-      document.getElementById('radiowidth').textContent = '--';
-    }
-  }
-
-  async function updateRadioInfo() {
-    const r = await getJson(qs('radio_info'));
-    applyRadioInfo(r);
-    return r;
-  }
-
-  function updateFrame(j) {
+  function applyBundle(j) {
     raw.textContent = JSON.stringify(j, null, 2);
-    if (j.radio) applyRadioInfo(j.radio);
-    if (!j.ok || !j.frame) {
-      setState(j.error || 'no frame', false);
-      return;
-    }
-    const f = j.frame;
-    drawFFT(f.bins || []);
-    frames += 1;
-    framesEl.textContent = String(frames);
-    document.getElementById('framefreq').textContent = frameFreqValid(f) ? `${f.freq1_mhz} MHz` : 'invalid / ignored';
-    document.getElementById('rssi').textContent = f.rssi ?? '--';
-    document.getElementById('maxbin').textContent = f.max_index ?? '--';
-    setState('receiving snapshot frames', true);
+    if (!j.ok) { setState(j.error || 'error', false); return; }
+
+    const c = j.capture || {};
+    const r = (j.radio && j.radio.ok) ? j.radio : {};
+    const w = j.waveform || {};
+    const wf = j.waterfall || { rows: [], min_dbm: -125, max_dbm: -65 };
+    const am = j.ambient || { rows: [], mode: 'minute_peak' };
+
+    document.getElementById('frames').textContent = String(c.frames_captured || 0);
+    document.getElementById('noframes').textContent = String(c.no_frame_count || 0);
+    document.getElementById('bytes').textContent = String(c.bytes_written || 0);
+    document.getElementById('rfreq').textContent = r.frequency_mhz ? `${r.frequency_mhz} MHz` : '--';
+    document.getElementById('rchan').textContent = r.channel || '--';
+    document.getElementById('rwidth').textContent = r.width_mhz ? `${r.width_mhz} MHz` : '--';
+    document.getElementById('rmode').textContent = r.mode || '--';
+    document.getElementById('rend').textContent = c.ends_at ? String(c.ends_at) : '--';
+    document.getElementById('wrange').textContent = `${w.x_start_mhz ?? '--'} to ${w.x_end_mhz ?? '--'} MHz`;
+    document.getElementById('wfrows').textContent = String((wf.rows || []).length);
+    document.getElementById('amrows').textContent = String((am.rows || []).length);
+    document.getElementById('ammode').textContent = am.mode || 'minute_peak';
+
+    if (c.state === 'running') setState('running', true);
+    else if (c.state === 'error') setState('error', false);
+    else setState(c.state || 'idle', null);
+
+    drawWaveform(w);
+    drawHeat(waterfall, wf.rows || [], wf.min_dbm ?? -125, wf.max_dbm ?? -65);
+    drawHeat(ambient, am.rows || [], wf.min_dbm ?? -125, wf.max_dbm ?? -65);
   }
 
-  async function pollCaptureStatus() {
-    const j = await getJson(qs('capture_status'));
-    const cap = document.getElementById('capturestate');
-    const bytes = document.getElementById('capturebytes');
-    bytes.textContent = String(j.latest_capture_bytes || j.tmp_capture_bytes || 0);
-    cap.textContent = j.running ? 'running' : (j.latest_capture_exists ? 'complete' : 'waiting for /tmp capture');
-    cap.className = j.running ? 'ok' : 'muted';
-    return j;
+  async function pollBundle() {
+    applyBundle(await getJson(qs('heatmap_bundle')));
   }
 
-  async function pollSnapshot() {
-    const s = await pollCaptureStatus();
-    const j = await getJson(qs('snapshot'));
-    updateFrame(j);
-    if (!j.ok && s.running) setState('capture running; waiting for snapshot frame', null);
-    if (timer && Date.now() > stopAt && !s.running) await stopPull();
-  }
-
-  async function updateUtilization() {
-    const j = await getJson(qs('utilization'));
-    if (!j.ok || !j.utilization) return;
-    document.getElementById('u-total').textContent = pct(j.utilization.total);
-    document.getElementById('u-tx').textContent = pct(j.utilization.tx);
-    document.getElementById('u-rx').textContent = pct(j.utilization.rx);
-    document.getElementById('u-ext').textContent = pct(j.utilization.external_busy);
-    document.getElementById('noise').textContent = Number.isFinite(j.noise_dbm) ? `${j.noise_dbm} dBm` : '--';
-  }
-
-  async function startPull() {
+  async function startCapture() {
     const seconds = Math.max(1, Math.min(20, parseInt(document.getElementById('seconds').value || '10', 10)));
     document.getElementById('seconds').value = seconds;
-    frames = 0;
-    framesEl.textContent = '0';
-    setState('starting...', null);
     raw.textContent = JSON.stringify(await getJson(qs('start')), null, 2);
-    stopAt = Date.now() + seconds * 1000 + 3000;
-    if (timer) clearInterval(timer);
-    timer = setInterval(pollSnapshot, 1200);
-    pollCaptureStatus();
-    setTimeout(pollSnapshot, 1200);
-    updateUtilization();
+    setState('starting...', null);
+    setTimeout(pollBundle, 800);
   }
 
-  async function stopPull() {
-    if (timer) clearInterval(timer);
-    timer = null;
+  async function stopCapture() {
     raw.textContent = JSON.stringify(await getJson(qs('stop')), null, 2);
-    await pollCaptureStatus();
-    setState('stopped', null);
+    setTimeout(pollBundle, 400);
   }
 
-  document.getElementById('start').addEventListener('click', startPull);
-  document.getElementById('stop').addEventListener('click', stopPull);
-  document.getElementById('snapshot').addEventListener('click', pollSnapshot);
-  setInterval(updateUtilization, 6000);
-  updateUtilization();
-  updateRadioInfo();
-  setInterval(updateRadioInfo, 30000);
-  drawFFT([]);
+  async function resetCapture() {
+    raw.textContent = JSON.stringify(await getJson(qs('reset')), null, 2);
+    setTimeout(pollBundle, 400);
+  }
+
+  document.getElementById('start').addEventListener('click', startCapture);
+  document.getElementById('stop').addEventListener('click', stopCapture);
+  document.getElementById('reset').addEventListener('click', resetCapture);
+
+  setInterval(pollBundle, 1200);
+  pollBundle();
 })();
 </script>
 </body>

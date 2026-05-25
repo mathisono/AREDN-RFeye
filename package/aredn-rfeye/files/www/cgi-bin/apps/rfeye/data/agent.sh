@@ -29,6 +29,24 @@ case "$ACTION" in
   radio_info)
     exec "$AGENT" radio_info
     ;;
+  ui_state)
+    exec "$AGENT" ui_state
+    ;;
+  waveform)
+    exec "$AGENT" waveform
+    ;;
+  waterfall)
+    exec "$AGENT" waterfall
+    ;;
+  ambient)
+    exec "$AGENT" ambient
+    ;;
+  heatmap_bundle)
+    exec "$AGENT" heatmap_bundle
+    ;;
+  reset)
+    exec "$AGENT" reset "${PHY_ARG:-phy0}"
+    ;;
   start)
     exec "$AGENT" start "${SECONDS_ARG:-10}" "${BINS_ARG:-128}" "${PHY_ARG:-phy0}"
     ;;

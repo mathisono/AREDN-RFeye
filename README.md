@@ -6,11 +6,17 @@ AREDN RFeye is an AREDN-native RF spectrum visibility tool for ath10k-based 802.
 
 The node package now includes:
 
-- `rfeye-agent` for safe status/start/stop/snapshot capture control and trusted radio-state reporting.
+- `rfeye-agent` with a controlled acquisition loop (fixed cadence, no overlapping snapshot/capture cycles).
+- A RAM-backed server-side frame buffer under `/tmp/rfeye` for normalized FFT display frames.
+- Capture session state model: `idle`, `running`, `complete`, `error`.
+- Server-side normalized UI products:
+  - current waveform trace
+  - rolling waterfall matrix
+  - rolling ambient minute-peak matrix
+- `action=heatmap_bundle` JSON endpoint for low-rate browser updates.
 - `rfeye-survey` for survey counters and utilization estimates.
 - `rfeye-spectral-parse` for ath10k TLV-to-JSON FFT frames.
-- A lightweight AREDN app GUI at `/cgi-bin/apps/rfeye/user`.
-- A CGI JSON bridge at `/cgi-bin/apps/rfeye/data/agent.sh`.
+- A lightweight AREDN app GUI at `/cgi-bin/apps/rfeye/user` with 3 structural panels.
 - Parser smoke tests and GitHub Actions smoke workflow.
 
 ## Safety rules
@@ -24,11 +30,10 @@ The node package now includes:
 
 ## Current field-test limitations
 
-First bench-node testing on `KJ6DZB-WSB-ACdish5` showed the core ath10k spectral path works, but some node/driver counters need defensive handling:
-
-- Survey counters may be zero or unchanged on some ath10k/IBSS nodes; `rfeye-survey` returns clean diagnostic JSON in that case.
-- CGI snapshot timing is still under test; failures should return diagnostic JSON rather than a bare `no frame`.
-- A 10-second capture succeeded on the first tested node and produced `/tmp/rfeye/latest.tlv`; shorter captures may need polling via `capture_status` before assuming the file exists.
+- This is still a node test tool, not a calibrated analyzer.
+- ath10k spectral availability and survey counters vary by hardware/driver build.
+- Ambient panel currently uses a lightweight minute-peak rollup, not long-term calibrated noise analytics.
+- Heavy analytics/replay/classification are intentionally deferred to Linux Workbench workflows.
 
 ## Radio frequency display
 
@@ -95,6 +100,30 @@ uci commit rfeye
 /etc/init.d/rfeye start
 ```
 
+## UI structure (current)
+
+The node GUI is organized as:
+
+1. **Waveform View** (top): current normalized spectrum line.
+2. **Waterfall View** (middle): rolling recent-frame heat map.
+3. **Ambient Noise Level** (bottom): rolling minute-peak heat map.
+
+The control/status area also shows trusted channel/frequency/width, capture state, frame count, no-frame count, and capture bytes.
+
+Color scale is currently fixed in code (`min_dbm`/`max_dbm`, blue→green/yellow→red).
+
+## Capture cadence model
+
+When capture is started, `rfeye-agent` runs a bounded loop:
+
+1. sample at fixed interval (`sample_interval_ms`)
+2. parse one frame
+3. normalize to fixed UI bins (`ui_bins`)
+4. append to ring/waterfall/ambient products in `/tmp/rfeye`
+5. publish low-rate JSON via `heatmap_bundle`
+
+If a cycle returns no frame, `no_frame_count` increments and prior heat-map history remains intact.
+
 ## Test the node GUI
 
 Open:
@@ -105,11 +134,11 @@ http://localnode.local.mesh/cgi-bin/apps/rfeye/user
 
 The GUI provides:
 
-- Start/stop data pull.
+- Start/stop/reset controls.
 - Test duration selector.
 - PHY and bin controls.
-- Current FFT canvas.
-- Utilization and external busy estimates.
+- Waveform/waterfall/ambient panels.
+- Capture/session counters and trusted radio info.
 - Raw JSON output for debugging.
 
 ## CGI/API tests
@@ -117,6 +146,11 @@ The GUI provides:
 ```sh
 curl 'http://localnode.local.mesh/cgi-bin/apps/rfeye/data/agent.sh?action=status'
 curl 'http://localnode.local.mesh/cgi-bin/apps/rfeye/data/agent.sh?action=radio_info'
+curl 'http://localnode.local.mesh/cgi-bin/apps/rfeye/data/agent.sh?action=ui_state'
+curl 'http://localnode.local.mesh/cgi-bin/apps/rfeye/data/agent.sh?action=waveform'
+curl 'http://localnode.local.mesh/cgi-bin/apps/rfeye/data/agent.sh?action=waterfall'
+curl 'http://localnode.local.mesh/cgi-bin/apps/rfeye/data/agent.sh?action=ambient'
+curl 'http://localnode.local.mesh/cgi-bin/apps/rfeye/data/agent.sh?action=heatmap_bundle'
 curl 'http://localnode.local.mesh/cgi-bin/apps/rfeye/data/agent.sh?action=survey'
 curl 'http://localnode.local.mesh/cgi-bin/apps/rfeye/data/agent.sh?action=utilization'
 curl 'http://localnode.local.mesh/cgi-bin/apps/rfeye/data/agent.sh?action=snapshot'

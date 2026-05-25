@@ -1,5 +1,5 @@
 #!/bin/sh
-# rfeye-agent: status/start/stop/snapshot with strict /tmp capture limits
+# rfeye-agent: reliable capture cadence + heatmap bundle endpoints (all state in /tmp/rfeye)
 
 set -u
 
@@ -11,12 +11,31 @@ CAPTURE_TMP="$STATE_DIR/latest.tlv.tmp"
 BYTES_FILE="$STATE_DIR/capture.bytes"
 CFG_FILE="/etc/config/rfeye"
 
+SESSION_FILE="$STATE_DIR/session.json"
+RADIO_FILE="$STATE_DIR/radio.json"
+WAVEFORM_FILE="$STATE_DIR/waveform.json"
+WATERFALL_FILE="$STATE_DIR/waterfall.ndjson"
+AMBIENT_FILE="$STATE_DIR/ambient.ndjson"
+AMBIENT_WORK_FILE="$STATE_DIR/ambient.work"
+RING_FILE="$STATE_DIR/frame_ring.ndjson"
+FRAME_FILE="$STATE_DIR/latest_frame.json"
+FRAME_RAW_FILE="$STATE_DIR/latest_parser_frame.json"
+BUNDLE_FILE="$STATE_DIR/heatmap_bundle.json"
+LOCK_DIR="$STATE_DIR/capture.lock"
+
 DEFAULT_PHY="phy0"
 DEFAULT_MODE="background"
 DEFAULT_BINS=128
+DEFAULT_UI_BINS=128
 DEFAULT_MAX_RUNTIME=20
 DEFAULT_MAX_CAPTURE_BYTES=262144
 DEFAULT_SNAPSHOT_BYTES=32768
+DEFAULT_SAMPLE_INTERVAL_MS=2000
+DEFAULT_WATERFALL_ROWS=64
+DEFAULT_AMBIENT_ROWS=60
+DEFAULT_RING_FRAMES=256
+DEFAULT_MIN_DBM=-125
+DEFAULT_MAX_DBM=-65
 
 mkdir -p "$STATE_DIR"
 
@@ -33,7 +52,6 @@ cfg_get() {
 }
 
 now_s() { date +%s; }
-
 file_size() { [ -f "$1" ] && wc -c < "$1" 2>/dev/null | awk '{print int($1)}' || echo 0; }
 
 resolve_phy() {
@@ -134,10 +152,29 @@ JSON
 }
 
 ath_dir() { echo "/sys/kernel/debug/ieee80211/$1/ath10k"; }
-
 scan_disable() {
   local phy="$1" ctl="$(ath_dir "$phy")/spectral_scan_ctl"
   [ -f "$ctl" ] && echo disable > "$ctl" 2>/dev/null || true
+}
+short_sleep() { sleep 0.2 2>/dev/null || sleep 1; }
+spectral_ctl_value() {
+  local phy="$1" ctl="$(ath_dir "$phy")/spectral_scan_ctl"
+  [ -f "$ctl" ] && cat "$ctl" 2>/dev/null || echo "unavailable"
+}
+
+spectral_reset_phy() {
+  local phy="$1" bins="${2:-$DEFAULT_BINS}" ath ctl binsf mode
+  ath="$(ath_dir "$phy")"
+  ctl="$ath/spectral_scan_ctl"
+  binsf="$ath/spectral_bins"
+  mode="$(cfg_get scan_mode "$DEFAULT_MODE")"
+  case "$bins" in 64|128|256) ;; *) bins="$DEFAULT_BINS" ;; esac
+  [ -f "$ctl" ] || return 1
+  echo disable > "$ctl" 2>/dev/null || true
+  short_sleep
+  [ -f "$binsf" ] && echo "$bins" > "$binsf" 2>/dev/null || true
+  echo "$mode" > "$ctl" 2>/dev/null || true
+  echo trigger > "$ctl" 2>/dev/null || true
 }
 
 running_pid() {
@@ -148,19 +185,260 @@ running_pid() {
   kill -0 "$pid" 2>/dev/null
 }
 
-finalize_tmp() {
-  if [ -f "$CAPTURE_TMP" ]; then
-    file_size "$CAPTURE_TMP" > "$BYTES_FILE" 2>/dev/null || true
-    mv -f "$CAPTURE_TMP" "$CAPTURE_FILE" 2>/dev/null || true
-  elif [ -f "$CAPTURE_FILE" ]; then
-    file_size "$CAPTURE_FILE" > "$BYTES_FILE" 2>/dev/null || true
+append_capped() {
+  local file="$1" line="$2" max="${3:-64}" tmp
+  [ "$max" -gt 1 ] 2>/dev/null || max=2
+  tmp="$file.tmp"
+  {
+    [ -f "$file" ] && tail -n $((max - 1)) "$file" 2>/dev/null || true
+    printf '%s\n' "$line"
+  } > "$tmp"
+  mv -f "$tmp" "$file"
+}
+
+json_array_from_lines() {
+  local file="$1"
+  if [ ! -s "$file" ]; then
+    echo "[]"
+    return 0
   fi
+  awk 'BEGIN{printf "["} NF{if(n++)printf ","; printf "%s", $0} END{printf "]"}' "$file"
+}
+
+extract_json_number() {
+  local json="$1" key="$2" v
+  v="$(printf '%s\n' "$json" | sed -n "s/.*\"$key\":\(-\{0,1\}[0-9][0-9]*\).*/\1/p" | head -n1)"
+  [ -n "$v" ] && echo "$v" || echo 0
+}
+
+extract_json_bool() {
+  local json="$1" key="$2" v
+  v="$(printf '%s\n' "$json" | sed -n "s/.*\"$key\":\(true\|false\).*/\1/p" | head -n1)"
+  [ -n "$v" ] && echo "$v" || echo false
+}
+
+extract_bins_csv() {
+  printf '%s\n' "$1" | sed -n 's/.*"bins":\[\(.*\)\].*/\1/p' | head -n1
+}
+
+normalize_bins_dbm_csv() {
+  local bins_csv="$1" out_bins="$2" noise="$3" min_dbm="$4" max_dbm="$5"
+  awk -v bins="$bins_csv" -v out="$out_bins" -v noise="$noise" -v minv="$min_dbm" -v maxv="$max_dbm" '
+    BEGIN {
+      n=split(bins,a,",");
+      if(n<1 || out<1){print ""; exit}
+      if(noise==0) noise=-95
+      for(i=1;i<=out;i++){
+        s=int((i-1)*n/out)+1;
+        e=int(i*n/out);
+        if(e<s)e=s;
+        m=-1;
+        for(j=s;j<=e && j<=n;j++){
+          v=a[j]+0;
+          if(v>m)m=v;
+        }
+        if(m<0)m=0;
+        db=noise + (m/255.0)*50.0;
+        if(db<minv) db=minv;
+        if(db>maxv) db=maxv;
+        iv=int(db+0.5);
+        printf("%s%d", (i==1?"":","), iv);
+      }
+      printf("\n");
+    }
+  '
+}
+
+csv_peak() {
+  local a="$1" b="$2"
+  awk -v A="$a" -v B="$b" 'BEGIN{
+    na=split(A,a,","); nb=split(B,b,","); n=(na>nb?na:nb);
+    for(i=1;i<=n;i++){
+      va=(i<=na?a[i]+0:-9999); vb=(i<=nb?b[i]+0:-9999);
+      m=(va>vb?va:vb);
+      if(m<-9000)m=0;
+      printf("%s%d", (i==1?"":","), int(m));
+    }
+    printf("\n");
+  }'
+}
+
+sleep_interval_ms() {
+  local ms="$1"
+  [ "$ms" -gt 0 ] 2>/dev/null || ms="$DEFAULT_SAMPLE_INTERVAL_MS"
+  if [ "$ms" -lt 200 ] 2>/dev/null; then ms=200; fi
+  awk -v ms="$ms" 'BEGIN{ printf "%.3f\n", ms/1000.0 }'
+}
+
+acquire_lock() {
+  local tries=0
+  while [ "$tries" -lt 20 ]; do
+    if mkdir "$LOCK_DIR" 2>/dev/null; then
+      return 0
+    fi
+    tries=$((tries + 1))
+    short_sleep
+  done
+  return 1
+}
+
+release_lock() { rmdir "$LOCK_DIR" 2>/dev/null || true; }
+
+write_session() {
+  local state="$1" started="$2" ends="$3" frames="$4" bytes="$5" latest="$6" nof="$7" err="${8:-}"
+  cat > "$SESSION_FILE" <<JSON
+{"state":"$state","started_at":$started,"ends_at":$ends,"frames_captured":$frames,"bytes_written":$bytes,"latest_frame_time":$latest,"no_frame_count":$nof,"error":"$(json_escape "$err")"}
+JSON
+}
+
+session_num() {
+  local key="$1" def="$2" v
+  [ -s "$SESSION_FILE" ] || { echo "$def"; return 0; }
+  v="$(sed -n "s/.*\"$key\":\(-\{0,1\}[0-9][0-9]*\).*/\1/p" "$SESSION_FILE" | head -n1)"
+  [ -n "$v" ] && echo "$v" || echo "$def"
+}
+
+session_state() {
+  [ -s "$SESSION_FILE" ] || { echo "idle"; return 0; }
+  sed -n 's/.*"state":"\([^"]*\)".*/\1/p' "$SESSION_FILE" | head -n1
+}
+
+radio_info_safe() {
+  local r
+  r="$(radio_info_cmd 2>/dev/null || true)"
+  [ -n "$r" ] && { printf '%s\n' "$r"; return 0; }
+  echo '{"ok":false,"error":"radio info unavailable"}'
+}
+
+store_radio() {
+  local r
+  r="$(radio_info_safe)"
+  printf '%s\n' "$r" > "$RADIO_FILE"
+}
+
+radio_json() {
+  if [ -s "$RADIO_FILE" ]; then cat "$RADIO_FILE"; else radio_info_safe; fi
+}
+
+update_ambient() {
+  local ts="$1" bins_csv="$2" rows max_rows minute curm curb peak line
+  max_rows="$(cfg_get ambient_rows "$DEFAULT_AMBIENT_ROWS")"
+  [ "$max_rows" -gt 1 ] 2>/dev/null || max_rows="$DEFAULT_AMBIENT_ROWS"
+  minute=$(( ts / 60 ))
+
+  if [ -s "$AMBIENT_WORK_FILE" ]; then
+    curm="$(cut -d'|' -f1 "$AMBIENT_WORK_FILE" 2>/dev/null || echo "")"
+    curb="$(cut -d'|' -f2- "$AMBIENT_WORK_FILE" 2>/dev/null || echo "")"
+  else
+    curm=""
+    curb=""
+  fi
+
+  if [ -z "$curm" ]; then
+    printf '%s|%s\n' "$minute" "$bins_csv" > "$AMBIENT_WORK_FILE"
+    return 0
+  fi
+
+  if [ "$curm" = "$minute" ]; then
+    peak="$(csv_peak "$curb" "$bins_csv")"
+    printf '%s|%s\n' "$minute" "$peak" > "$AMBIENT_WORK_FILE"
+    return 0
+  fi
+
+  line="{\"timestamp\":$((curm * 60)),\"bins\":[${curb}]}"
+  append_capped "$AMBIENT_FILE" "$line" "$max_rows"
+  printf '%s|%s\n' "$minute" "$bins_csv" > "$AMBIENT_WORK_FILE"
+}
+
+render_waveform_default() {
+  local r freq width x0 x1
+  r="$(radio_json)"
+  freq="$(extract_json_number "$r" frequency_mhz)"
+  width="$(extract_json_number "$r" width_mhz)"
+  [ "$width" -gt 0 ] 2>/dev/null || width=20
+  x0=$((freq - (width / 2)))
+  x1=$((freq + (width / 2)))
+  [ "$x0" -gt 0 ] 2>/dev/null || x0=0
+  [ "$x1" -gt 0 ] 2>/dev/null || x1=0
+  echo "{\"x_start_mhz\":$x0,\"x_end_mhz\":$x1,\"bins\":[]}"
+}
+
+ambient_rows_json() {
+  local amb_rows cur_line curm curb
+  if [ -s "$AMBIENT_WORK_FILE" ]; then
+    curm="$(cut -d'|' -f1 "$AMBIENT_WORK_FILE" 2>/dev/null || true)"
+    curb="$(cut -d'|' -f2- "$AMBIENT_WORK_FILE" 2>/dev/null || true)"
+    if [ -n "$curm" ] && [ -n "$curb" ]; then
+      cur_line="{\"timestamp\":$((curm * 60)),\"bins\":[${curb}]}"
+      {
+        [ -s "$AMBIENT_FILE" ] && cat "$AMBIENT_FILE" || true
+        printf '%s\n' "$cur_line"
+      } > "$AMBIENT_FILE.tmp"
+      amb_rows="$(json_array_from_lines "$AMBIENT_FILE.tmp")"
+      rm -f "$AMBIENT_FILE.tmp"
+      echo "$amb_rows"
+      return 0
+    fi
+  fi
+  json_array_from_lines "$AMBIENT_FILE"
+}
+
+render_bundle() {
+  local r c w wf_rows amb_rows min_dbm max_dbm
+  min_dbm="$(cfg_get min_dbm "$DEFAULT_MIN_DBM")"
+  max_dbm="$(cfg_get max_dbm "$DEFAULT_MAX_DBM")"
+  r="$(radio_json)"
+  c="$( [ -s "$SESSION_FILE" ] && cat "$SESSION_FILE" || echo '{"state":"idle","started_at":0,"ends_at":0,"frames_captured":0,"bytes_written":0,"latest_frame_time":0,"no_frame_count":0,"error":""}' )"
+  w="$( [ -s "$WAVEFORM_FILE" ] && cat "$WAVEFORM_FILE" || render_waveform_default )"
+  wf_rows="$(json_array_from_lines "$WATERFALL_FILE")"
+  amb_rows="$(ambient_rows_json)"
+
+  cat > "$BUNDLE_FILE" <<JSON
+{"ok":true,"radio":$r,"capture":$c,"waveform":$w,"waterfall":{"rows":$wf_rows,"min_dbm":$min_dbm,"max_dbm":$max_dbm},"ambient":{"rows":$amb_rows,"mode":"minute_peak"}}
+JSON
+  cat "$BUNDLE_FILE"
+}
+
+capture_once() {
+  # stdout: frame JSON if success, empty otherwise
+  # side effects: writes CAPTURE_FILE and updates BYTES_FILE (bytes in latest capture)
+  local phy="$1" bins="$2" snap_bytes="$3" parser="$4" iface tmp stats bytes_read frame
+  local ath scan0
+  ath="$(ath_dir "$phy")"
+  scan0="$ath/spectral_scan0"
+  tmp="$STATE_DIR/cycle.$$.bin"
+  stats="$STATE_DIR/cycle.$$.stats"
+  iface="$(resolve_iface "$phy")"
+
+  [ -f "$scan0" ] || return 1
+  [ -x "$parser" ] || return 1
+
+  rm -f "$tmp" "$stats"
+  spectral_reset_phy "$phy" "$bins" || true
+  [ -n "$iface" ] && command -v iw >/dev/null 2>&1 && iw dev "$iface" scan >/dev/null 2>&1 || true
+  dd if="$scan0" of="$tmp" bs=1 count="$snap_bytes" 2>/dev/null || true
+  scan_disable "$phy"
+
+  bytes_read="$(file_size "$tmp")"
+  echo "$bytes_read" > "$BYTES_FILE" 2>/dev/null || true
+  mv -f "$tmp" "$CAPTURE_FILE" 2>/dev/null || true
+
+  frame="$($parser --input "$CAPTURE_FILE" --phy "$phy" --limit 1 --bins 256 2>/dev/null | head -n1)"
+  rm -f "$stats" "$tmp"
+  if [ -n "$frame" ]; then
+    printf '%s\n' "$frame" > "$FRAME_RAW_FILE"
+    printf '%s\n' "$frame"
+    return 0
+  fi
+  return 1
 }
 
 cleanup_stale() {
   if ! running_pid; then
-    finalize_tmp
     rm -f "$PID_FILE" "$END_FILE"
+    [ -s "$SESSION_FILE" ] || write_session "idle" 0 0 0 0 0 0 ""
+    store_radio
+    render_bundle >/dev/null 2>&1 || true
   fi
 }
 
@@ -177,7 +455,6 @@ expire_capture_if_needed() {
   sleep 1
   [ -n "$pid" ] && kill -9 "$pid" 2>/dev/null || true
   phy="$(resolve_phy)"
-  finalize_tmp
   scan_disable "$phy"
   rm -f "$PID_FILE" "$END_FILE"
 }
@@ -185,25 +462,14 @@ expire_capture_if_needed() {
 capture_status_cmd() {
   expire_capture_if_needed
   cleanup_stale
-  local running="false" now end exists="false" bytes tmp_bytes
+  local running="false" now end exists="false" bytes
   running_pid && running="true"
   now="$(now_s)"
   end="$(cat "$END_FILE" 2>/dev/null || echo 0)"
   [ -f "$CAPTURE_FILE" ] && exists="true"
-  bytes="$(file_size "$CAPTURE_FILE")"
-  tmp_bytes="$(file_size "$CAPTURE_TMP")"
-  [ "$bytes" -gt 0 ] 2>/dev/null || bytes="$(cat "$BYTES_FILE" 2>/dev/null || echo 0)"
+  bytes="$(session_num bytes_written 0)"
   cat <<JSON
-{
-  "ok": true,
-  "running": $running,
-  "latest_capture": "$CAPTURE_FILE",
-  "latest_capture_exists": $exists,
-  "latest_capture_bytes": $bytes,
-  "tmp_capture_bytes": $tmp_bytes,
-  "capture_end": $end,
-  "now": $now
-}
+{"ok":true,"running":$running,"latest_capture":"$CAPTURE_FILE","latest_capture_exists":$exists,"latest_capture_bytes":$bytes,"capture_end":$end,"now":$now,"capture":$( [ -s "$SESSION_FILE" ] && cat "$SESSION_FILE" || echo '{"state":"idle","started_at":0,"ends_at":0,"frames_captured":0,"bytes_written":0,"latest_frame_time":0,"no_frame_count":0,"error":""}' )}
 JSON
 }
 
@@ -217,101 +483,136 @@ status_cmd() {
   binsf="$ath/spectral_bins"
   countf="$ath/spectral_count"
   parser="/usr/lib/rfeye/rfeye-spectral-parse"
-
-  iface=""
-  for n in /sys/class/ieee80211/$phy/device/net/*; do
-    [ -e "$n" ] || continue
-    iface="$(basename "$n")"; break
-  done
+  iface="$(resolve_iface "$phy")"
 
   running_pid && running="true"
   [ -f "$CAPTURE_FILE" ] && exists="true"
-  bytes="$(file_size "$CAPTURE_FILE")"
+  bytes="$(session_num bytes_written 0)"
   now="$(now_s)"
   end="$(cat "$END_FILE" 2>/dev/null || echo 0)"
 
-  echo "{"
-  echo "  \"ok\": true,"
-  echo "  \"phy\": \"$(json_escape "$phy")\","
-  echo "  \"running\": $running,"
-  echo "  \"now\": $now,"
-  echo "  \"capture_end\": $end,"
-  echo "  \"limits\": {"
-  echo "    \"max_runtime_seconds\": $(cfg_get max_runtime_seconds "$DEFAULT_MAX_RUNTIME"),"
-  echo "    \"max_capture_bytes\": $(cfg_get max_capture_bytes "$DEFAULT_MAX_CAPTURE_BYTES"),"
-  echo "    \"snapshot_bytes\": $(cfg_get snapshot_bytes "$DEFAULT_SNAPSHOT_BYTES")"
-  echo "  },"
-  echo "  \"paths\": {"
-  echo "    \"spectral_scan_ctl\": $( [ -f "$ctl" ] && echo true || echo false ),"
-  echo "    \"spectral_scan0\": $( [ -f "$scan0" ] && echo true || echo false ),"
-  echo "    \"spectral_bins\": $( [ -f "$binsf" ] && echo true || echo false ),"
-  echo "    \"spectral_count\": $( [ -f "$countf" ] && echo true || echo false ),"
-  echo "    \"parser\": $( [ -x "$parser" ] && echo true || echo false )"
-  echo "  },"
-  echo "  \"iface\": \"$(json_escape "$iface")\","
-  echo "  \"latest_capture\": \"$CAPTURE_FILE\","
-  echo "  \"latest_capture_exists\": $exists,"
-  echo "  \"latest_capture_bytes\": $bytes"
-  echo "}"
+  cat <<JSON
+{"ok":true,"phy":"$(json_escape "$phy")","running":$running,"now":$now,"capture_end":$end,"limits":{"max_runtime_seconds":$(cfg_get max_runtime_seconds "$DEFAULT_MAX_RUNTIME"),"max_capture_bytes":$(cfg_get max_capture_bytes "$DEFAULT_MAX_CAPTURE_BYTES"),"snapshot_bytes":$(cfg_get snapshot_bytes "$DEFAULT_SNAPSHOT_BYTES")},"paths":{"spectral_scan_ctl":$( [ -f "$ctl" ] && echo true || echo false ),"spectral_scan0":$( [ -f "$scan0" ] && echo true || echo false ),"spectral_bins":$( [ -f "$binsf" ] && echo true || echo false ),"spectral_count":$( [ -f "$countf" ] && echo true || echo false ),"parser":$( [ -x "$parser" ] && echo true || echo false )},"iface":"$(json_escape "$iface")","latest_capture":"$CAPTURE_FILE","latest_capture_exists":$exists,"latest_capture_bytes":$bytes,"capture":$( [ -s "$SESSION_FILE" ] && cat "$SESSION_FILE" || echo '{"state":"idle","started_at":0,"ends_at":0,"frames_captured":0,"bytes_written":0,"latest_frame_time":0,"no_frame_count":0,"error":""}' )}
+JSON
+}
+
+update_products_from_frame() {
+  local ts="$1" radio="$2" frame="$3" ui_bins="$4"
+  local min_dbm max_dbm freq_valid freq1 width noise rssi bins_csv norm_csv
+  local rf rw x0 x1 wf_row ring_max wf_rows
+
+  min_dbm="$(cfg_get min_dbm "$DEFAULT_MIN_DBM")"
+  max_dbm="$(cfg_get max_dbm "$DEFAULT_MAX_DBM")"
+  ring_max="$(cfg_get ring_frames "$DEFAULT_RING_FRAMES")"
+  wf_rows="$(cfg_get waterfall_rows "$DEFAULT_WATERFALL_ROWS")"
+  [ "$ring_max" -gt 2 ] 2>/dev/null || ring_max="$DEFAULT_RING_FRAMES"
+  [ "$wf_rows" -gt 2 ] 2>/dev/null || wf_rows="$DEFAULT_WATERFALL_ROWS"
+
+  freq_valid="$(extract_json_bool "$frame" freq_valid)"
+  freq1="$(extract_json_number "$frame" freq1_mhz)"
+  width="$(extract_json_number "$frame" width_mhz)"
+  noise="$(extract_json_number "$frame" noise)"
+  rssi="$(extract_json_number "$frame" rssi)"
+  bins_csv="$(extract_bins_csv "$frame")"
+  norm_csv="$(normalize_bins_dbm_csv "$bins_csv" "$ui_bins" "$noise" "$min_dbm" "$max_dbm")"
+  [ -n "$norm_csv" ] || norm_csv=""
+
+  cat > "$FRAME_FILE" <<JSON
+{"timestamp":$ts,"radio":$radio,"frame":{"freq_valid":$freq_valid,"freq1_mhz":$freq1,"width_mhz":$width,"noise":$noise,"rssi":$rssi,"bins":[${norm_csv}]}}
+JSON
+  append_capped "$RING_FILE" "$(cat "$FRAME_FILE")" "$ring_max"
+
+  rf="$(extract_json_number "$radio" frequency_mhz)"
+  rw="$(extract_json_number "$radio" width_mhz)"
+  [ "$rw" -gt 0 ] 2>/dev/null || rw="$width"
+  [ "$rw" -gt 0 ] 2>/dev/null || rw=20
+  x0=$((rf - (rw / 2)))
+  x1=$((rf + (rw / 2)))
+  [ "$x0" -gt 0 ] 2>/dev/null || x0=0
+  [ "$x1" -gt 0 ] 2>/dev/null || x1=0
+  cat > "$WAVEFORM_FILE" <<JSON
+{"x_start_mhz":$x0,"x_end_mhz":$x1,"bins":[${norm_csv}]}
+JSON
+
+  wf_row="{\"timestamp\":$ts,\"bins\":[${norm_csv}]}"
+  append_capped "$WATERFALL_FILE" "$wf_row" "$wf_rows"
+  update_ambient "$ts" "$norm_csv"
 }
 
 capture_worker() {
-  local phy="$1" seconds="$2" bins="$3" max_bytes="$4"
-  local ath ctl scan0 binsf mode iface
+  local phy="$1" seconds="$2" bins="$3" max_bytes="$4" snap_bytes="$5" interval_ms="$6" ui_bins="$7"
+  local parser ath scan0 start_ts end_ts now frames bytes nof latest radio frame interval_s
+  parser="/usr/lib/rfeye/rfeye-spectral-parse"
   ath="$(ath_dir "$phy")"
-  ctl="$ath/spectral_scan_ctl"
   scan0="$ath/spectral_scan0"
-  binsf="$ath/spectral_bins"
-  mode="$(cfg_get scan_mode "$DEFAULT_MODE")"
 
   finish_worker() {
-    finalize_tmp
+    local final_state err started
     scan_disable "$phy"
     rm -f "$PID_FILE" "$END_FILE"
+    started="$(session_num started_at "$start_ts")"
+    final_state="$(session_state)"
+    [ "$final_state" = "error" ] || final_state="complete"
+    write_session "$final_state" "$started" "$(now_s)" "$frames" "$bytes" "$latest" "$nof" "$err"
+    store_radio
+    render_bundle >/dev/null 2>&1 || true
   }
   trap 'finish_worker; exit 0' INT TERM HUP EXIT
 
-  if [ ! -f "$scan0" ] || [ ! -f "$ctl" ]; then
-    echo "rfeye-agent: spectral files missing for $phy" >&2
+  if [ ! -f "$scan0" ] || [ ! -x "$parser" ]; then
+    write_session "error" "$(now_s)" "$(now_s)" 0 0 0 0 "unsupported spectral path"
     exit 1
   fi
 
   case "$bins" in 64|128|256) ;; *) bins="$DEFAULT_BINS" ;; esac
+  [ "$snap_bytes" -gt 0 ] 2>/dev/null || snap_bytes="$DEFAULT_SNAPSHOT_BYTES"
+  [ "$snap_bytes" -gt "$max_bytes" ] && snap_bytes="$max_bytes"
+  [ "$ui_bins" -gt 15 ] 2>/dev/null || ui_bins="$DEFAULT_UI_BINS"
 
-  mkdir -p "$STATE_DIR"
-  rm -f "$CAPTURE_TMP" "$CAPTURE_FILE"
-  echo 0 > "$BYTES_FILE" 2>/dev/null || true
+  start_ts="$(now_s)"
+  end_ts=$((start_ts + seconds))
+  interval_s="$(sleep_interval_ms "$interval_ms")"
+  frames=0
+  bytes=0
+  nof=0
+  latest=0
 
-  [ -f "$binsf" ] && echo "$bins" > "$binsf" 2>/dev/null || true
-  echo "$mode" > "$ctl" 2>/dev/null || true
-  echo trigger > "$ctl" 2>/dev/null || true
+  write_session "running" "$start_ts" "$end_ts" "$frames" "$bytes" "$latest" "$nof" ""
+  store_radio
+  render_bundle >/dev/null 2>&1 || true
 
-  iface=""
-  for n in /sys/class/ieee80211/$phy/device/net/*; do
-    [ -e "$n" ] || continue
-    iface="$(basename "$n")"; break
-  done
-  [ -n "$iface" ] && command -v iw >/dev/null 2>&1 && iw dev "$iface" scan >/dev/null 2>&1 || true
-
-  # BusyBox/coreutils timeout behavior against debugfs can vary on small
-  # nodes. Run dd directly, then enforce the wall-clock bound ourselves.
-  dd if="$scan0" of="$CAPTURE_TMP" bs=1 count="$max_bytes" 2>/dev/null &
-  local dd_pid=$! end_ts now
-  end_ts=$(( $(now_s) + seconds ))
-  while kill -0 "$dd_pid" 2>/dev/null; do
+  while true; do
     now="$(now_s)"
     [ "$now" -ge "$end_ts" ] && break
-    sleep 1
-  done
-  if kill -0 "$dd_pid" 2>/dev/null; then
-    kill "$dd_pid" 2>/dev/null || true
-    sleep 1
-    kill -9 "$dd_pid" 2>/dev/null || true
-  fi
-  wait "$dd_pid" 2>/dev/null || true
 
-  finish_worker
+    radio="$(radio_info_safe)"
+    printf '%s\n' "$radio" > "$RADIO_FILE"
+
+    frame=""
+    if acquire_lock; then
+      frame="$(capture_once "$phy" "$bins" "$snap_bytes" "$parser" 2>/dev/null || true)"
+      release_lock
+    fi
+
+    if [ -n "$frame" ]; then
+      local cycle_bytes
+      cycle_bytes="$(file_size "$CAPTURE_FILE")"
+      bytes=$((bytes + cycle_bytes))
+      frames=$((frames + 1))
+      latest="$(now_s)"
+      update_products_from_frame "$latest" "$radio" "$frame" "$ui_bins"
+      write_session "running" "$start_ts" "$end_ts" "$frames" "$bytes" "$latest" "$nof" ""
+    else
+      nof=$((nof + 1))
+      write_session "running" "$start_ts" "$end_ts" "$frames" "$bytes" "$latest" "$nof" "no frame"
+    fi
+
+    render_bundle >/dev/null 2>&1 || true
+    sleep "$interval_s"
+  done
+
   trap - INT TERM HUP EXIT
+  finish_worker
 }
 
 start_cmd() {
@@ -324,31 +625,35 @@ start_cmd() {
   local req_seconds="${1:-$(cfg_get max_runtime_seconds "$DEFAULT_MAX_RUNTIME")}" 
   local req_bins="${2:-$(cfg_get bins "$DEFAULT_BINS")}" 
   local phy="${3:-$(resolve_phy)}"
-  local max_runtime max_bytes seconds
+  local max_runtime max_bytes seconds snap_bytes interval_ms ui_bins
   max_runtime="$(cfg_get max_runtime_seconds "$DEFAULT_MAX_RUNTIME")"
   max_bytes="$(cfg_get max_capture_bytes "$DEFAULT_MAX_CAPTURE_BYTES")"
+  snap_bytes="$(cfg_get snapshot_bytes "$DEFAULT_SNAPSHOT_BYTES")"
+  interval_ms="$(cfg_get sample_interval_ms "$DEFAULT_SAMPLE_INTERVAL_MS")"
+  ui_bins="$(cfg_get ui_bins "$DEFAULT_UI_BINS")"
 
   [ "$req_seconds" -gt 0 ] 2>/dev/null || req_seconds=1
   [ "$max_runtime" -gt 0 ] 2>/dev/null || max_runtime="$DEFAULT_MAX_RUNTIME"
   [ "$max_bytes" -gt 1023 ] 2>/dev/null || max_bytes="$DEFAULT_MAX_CAPTURE_BYTES"
+  [ "$snap_bytes" -gt 0 ] 2>/dev/null || snap_bytes="$DEFAULT_SNAPSHOT_BYTES"
+  [ "$ui_bins" -gt 15 ] 2>/dev/null || ui_bins="$DEFAULT_UI_BINS"
 
   seconds="$req_seconds"
   [ "$seconds" -gt "$max_runtime" ] && seconds="$max_runtime"
 
   mkdir -p "$STATE_DIR"
-  rm -f "$CAPTURE_TMP" "$CAPTURE_FILE"
   echo 0 > "$BYTES_FILE" 2>/dev/null || true
 
-  ( capture_worker "$phy" "$seconds" "$req_bins" "$max_bytes" ) &
+  ( capture_worker "$phy" "$seconds" "$req_bins" "$max_bytes" "$snap_bytes" "$interval_ms" "$ui_bins" ) &
   local pid=$!
   echo "$pid" > "$PID_FILE"
   echo $(( $(now_s) + seconds )) > "$END_FILE"
 
-  echo "{\"ok\":true,\"running\":true,\"pid\":$pid,\"seconds\":$seconds,\"bins\":$req_bins,\"phy\":\"$(json_escape "$phy")\",\"max_capture_bytes\":$max_bytes,\"latest_capture\":\"$CAPTURE_FILE\"}"
+  echo "{\"ok\":true,\"running\":true,\"pid\":$pid,\"seconds\":$seconds,\"bins\":$req_bins,\"phy\":\"$(json_escape "$phy")\",\"max_capture_bytes\":$max_bytes,\"sample_interval_ms\":$interval_ms,\"ui_bins\":$ui_bins}"
 }
 
 stop_cmd() {
-  local phy bytes
+  local phy bytes started frames nof latest
   phy="$(resolve_phy)"
   if running_pid; then
     local pid
@@ -357,59 +662,100 @@ stop_cmd() {
     sleep 1
     kill -9 "$pid" 2>/dev/null || true
   fi
-  finalize_tmp
   scan_disable "$phy"
   rm -f "$PID_FILE" "$END_FILE"
-  bytes="$(file_size "$CAPTURE_FILE")"
+
+  started="$(session_num started_at 0)"
+  frames="$(session_num frames_captured 0)"
+  nof="$(session_num no_frame_count 0)"
+  latest="$(session_num latest_frame_time 0)"
+  bytes="$(session_num bytes_written 0)"
+  write_session "complete" "$started" "$(now_s)" "$frames" "$bytes" "$latest" "$nof" ""
+  store_radio
+  render_bundle >/dev/null 2>&1 || true
+
   echo "{\"ok\":true,\"running\":false,\"latest_capture\":\"$CAPTURE_FILE\",\"latest_capture_exists\":$( [ -f "$CAPTURE_FILE" ] && echo true || echo false ),\"latest_capture_bytes\":$bytes}"
 }
 
+reset_cmd() {
+  local phy="${1:-$(resolve_phy)}"
+  scan_disable "$phy"
+  if ! running_pid; then
+    rm -f "$PID_FILE" "$END_FILE" "$CAPTURE_TMP" "$CAPTURE_FILE" "$BYTES_FILE" "$FRAME_FILE" "$FRAME_RAW_FILE" "$RING_FILE" "$WAVEFORM_FILE" "$WATERFALL_FILE" "$AMBIENT_FILE" "$AMBIENT_WORK_FILE" "$BUNDLE_FILE"
+    write_session "idle" 0 0 0 0 0 0 ""
+  fi
+  store_radio
+  render_bundle >/dev/null 2>&1 || true
+  echo "{\"ok\":true,\"reset\":true,\"phy\":\"$(json_escape "$phy")\",\"spectral_ctl_after\":\"$(json_escape "$(spectral_ctl_value "$phy")")\"}"
+}
+
 snapshot_cmd() {
-  local phy="$(resolve_phy)" snap_bytes parser radio_json
+  local phy parser bins snap_bytes frame r
+  phy="$(resolve_phy)"
   parser="/usr/lib/rfeye/rfeye-spectral-parse"
-  radio_json="$(radio_info_cmd 2>/dev/null || echo '{"ok":false,"error":"radio info unavailable"}')"
+  bins="$(cfg_get bins "$DEFAULT_BINS")"
   snap_bytes="$(cfg_get snapshot_bytes "$DEFAULT_SNAPSHOT_BYTES")"
-  [ "$snap_bytes" -gt 0 ] 2>/dev/null || snap_bytes="$DEFAULT_SNAPSHOT_BYTES"
-  [ "$snap_bytes" -gt "$DEFAULT_MAX_CAPTURE_BYTES" ] && snap_bytes="$DEFAULT_MAX_CAPTURE_BYTES"
+  r="$(radio_info_safe)"
 
-  local ath scan0 ctl tmp scan0_exists="false" ctl_exists="false" parser_exists="false" bytes_read=0 parser_out frame tries
-  ath="$(ath_dir "$phy")"
-  scan0="$ath/spectral_scan0"
-  ctl="$ath/spectral_scan_ctl"
-  tmp="$STATE_DIR/snapshot.bin"
-  [ -f "$scan0" ] && scan0_exists="true"
-  [ -f "$ctl" ] && ctl_exists="true"
-  [ -x "$parser" ] && parser_exists="true"
-
-  if [ ! -f "$scan0" ] || [ ! -x "$parser" ]; then
-    echo "{\"ok\":false,\"error\":\"unsupported\",\"phy\":\"$(json_escape "$phy")\",\"radio\":$radio_json,\"scan0_exists\":$scan0_exists,\"ctl_exists\":$ctl_exists,\"parser_exists\":$parser_exists,\"bytes_read\":0,\"parser_output_present\":false}"
+  if running_pid; then
+    if [ -s "$FRAME_RAW_FILE" ]; then
+      frame="$(cat "$FRAME_RAW_FILE")"
+      echo "{\"ok\":true,\"radio\":$r,\"frame\":$frame,\"diagnostics\":{\"from_buffer\":true,\"spectral_ctl_after\":\"$(json_escape "$(spectral_ctl_value "$phy")")\"}}"
+      return 0
+    fi
+    echo "{\"ok\":false,\"error\":\"no frame\",\"radio\":$r,\"diagnostics\":{\"running\":true,\"from_buffer\":true}}"
     return 1
   fi
 
-  frame=""
-  parser_out=""
-  bytes_read=0
-  tries=0
-  while [ "$tries" -lt 3 ]; do
-    tries=$((tries + 1))
-    [ -f "$ctl" ] && echo background > "$ctl" 2>/dev/null || true
-    [ -f "$ctl" ] && echo trigger > "$ctl" 2>/dev/null || true
-    dd if="$scan0" of="$tmp" bs=1 count="$snap_bytes" 2>/dev/null || true
-    [ -f "$ctl" ] && echo disable > "$ctl" 2>/dev/null || true
-    bytes_read="$(file_size "$tmp")"
-    parser_out="$($parser --input "$tmp" --phy "$phy" --limit 1 --bins 128 2>/dev/null | head -n1)"
-    frame="$parser_out"
-    [ -n "$frame" ] && break
-    sleep 1
-  done
-  rm -f "$tmp"
-
-  if [ -z "$frame" ]; then
-    echo "{\"ok\":false,\"error\":\"no frame\",\"phy\":\"$(json_escape "$phy")\",\"radio\":$radio_json,\"scan0_exists\":$scan0_exists,\"ctl_exists\":$ctl_exists,\"parser_exists\":$parser_exists,\"bytes_read\":$bytes_read,\"parser_output_present\":false,\"tries\":$tries}"
+  if ! acquire_lock; then
+    echo "{\"ok\":false,\"error\":\"capture busy\",\"radio\":$r,\"diagnostics\":{\"lock_busy\":true}}"
     return 1
   fi
+  frame="$(capture_once "$phy" "$bins" "$snap_bytes" "$parser" 2>/dev/null || true)"
+  release_lock
 
-  echo "{\"ok\":true,\"radio\":$radio_json,\"frame\":$frame,\"diagnostics\":{\"scan0_exists\":$scan0_exists,\"ctl_exists\":$ctl_exists,\"parser_exists\":$parser_exists,\"bytes_read\":$bytes_read,\"parser_output_present\":true,\"tries\":$tries}}"
+  if [ -n "$frame" ]; then
+    local ts
+    ts="$(now_s)"
+    update_products_from_frame "$ts" "$r" "$frame" "$(cfg_get ui_bins "$DEFAULT_UI_BINS")"
+    write_session "complete" "$ts" "$ts" 1 "$(file_size "$CAPTURE_FILE")" "$ts" 0 ""
+    render_bundle >/dev/null 2>&1 || true
+    echo "{\"ok\":true,\"radio\":$r,\"frame\":$frame,\"diagnostics\":{\"from_buffer\":false,\"bytes_read\":$(file_size "$CAPTURE_FILE"),\"spectral_ctl_after\":\"$(json_escape "$(spectral_ctl_value "$phy")")\"}}"
+    return 0
+  fi
+
+  write_session "error" "$(now_s)" "$(now_s)" 0 0 0 $(( $(session_num no_frame_count 0) + 1 )) "no frame"
+  render_bundle >/dev/null 2>&1 || true
+  echo "{\"ok\":false,\"error\":\"no frame\",\"radio\":$r,\"diagnostics\":{\"spectral_ctl_after\":\"$(json_escape "$(spectral_ctl_value "$phy")")\"}}"
+  return 1
+}
+
+ui_state_cmd() {
+  cleanup_stale
+  local r c
+  r="$(radio_json)"
+  c="$( [ -s "$SESSION_FILE" ] && cat "$SESSION_FILE" || echo '{"state":"idle","started_at":0,"ends_at":0,"frames_captured":0,"bytes_written":0,"latest_frame_time":0,"no_frame_count":0,"error":""}' )"
+  echo "{\"ok\":true,\"radio\":$r,\"capture\":$c}"
+}
+
+waveform_cmd() {
+  cleanup_stale
+  echo "{\"ok\":true,\"waveform\":$( [ -s "$WAVEFORM_FILE" ] && cat "$WAVEFORM_FILE" || render_waveform_default )}"
+}
+
+waterfall_cmd() {
+  cleanup_stale
+  echo "{\"ok\":true,\"waterfall\":{\"rows\":$(json_array_from_lines "$WATERFALL_FILE"),\"min_dbm\":$(cfg_get min_dbm "$DEFAULT_MIN_DBM"),\"max_dbm\":$(cfg_get max_dbm "$DEFAULT_MAX_DBM")}}"
+}
+
+ambient_cmd() {
+  cleanup_stale
+  echo "{\"ok\":true,\"ambient\":{\"rows\":$(ambient_rows_json),\"mode\":\"minute_peak\"}}"
+}
+
+heatmap_bundle_cmd() {
+  cleanup_stale
+  render_bundle
 }
 
 daemon_cmd() {
@@ -433,12 +779,18 @@ case "$cmd" in
   status) status_cmd ;;
   capture_status) capture_status_cmd ;;
   radio_info) radio_info_cmd ;;
+  ui_state) ui_state_cmd ;;
+  waveform) waveform_cmd ;;
+  waterfall) waterfall_cmd ;;
+  ambient) ambient_cmd ;;
+  heatmap_bundle) heatmap_bundle_cmd ;;
+  reset) reset_cmd "${1:-$(resolve_phy)}" ;;
   start) start_cmd "$@" ;;
   stop) stop_cmd ;;
   snapshot) snapshot_cmd ;;
   daemon) daemon_cmd ;;
   *)
-    echo '{"ok":false,"error":"usage: rfeye-agent {status|capture_status|radio_info|start [seconds bins phy]|stop|snapshot|daemon}"}'
+    echo '{"ok":false,"error":"usage: rfeye-agent {status|capture_status|radio_info|ui_state|waveform|waterfall|ambient|heatmap_bundle|reset|start [seconds bins phy]|stop|snapshot|daemon}"}'
     exit 2
     ;;
 esac
