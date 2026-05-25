@@ -21,7 +21,7 @@
 - Build issue diagnosed/fixed:
   - SDK host `awk` symlink was pointing to a local gawk without runtime library path, causing metadata generation failures and then `No rule to make target ...`.
   - Setting `LD_LIBRARY_PATH=/home/bill/src/local-gawk/lib` for SDK make calls restored package metadata scanning and target generation.
-- Node retest completed: **No** (bench node unreachable at test time; SSH and HTTP timed out).
+- Node retest completed: **Yes (PARTIAL PASS)** via jump host MSE-88 (`192.168.3.88`). Package installed and endpoints validated; captures still produced zero frames in this run.
 
 ## Prior artifacts
 
