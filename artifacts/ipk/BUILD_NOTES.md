@@ -2,7 +2,7 @@
 
 ## r9 build (2026-05-25 UTC)
 
-- Commit: b738b0c
+- Commit: `841640a` (`rfeye: improve live capture cadence and export diagnostics`)
 - Package: `aredn-rfeye 0.1.0-r9`
 - IPK filename: `aredn-rfeye_0.1.0-r9_mips_24kc.ipk`
 - SHA256: `ec25e05fab06640e96514642391058986681ce533879e73ccad9e130a90f7638`
