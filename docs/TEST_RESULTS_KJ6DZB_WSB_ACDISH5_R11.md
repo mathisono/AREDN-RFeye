@@ -1,60 +1,110 @@
 # RFeye r11 Test Results — KJ6DZB-WSB-ACdish5
 
-Date: 2026-05-25 16:09 PDT
+Date: 2026-05-25 16:33–16:45 PDT
 
-## Package
+## Package under test
 
-- Commit under test: `3f34455` (`rfeye: improve node GUI layout and heatmap scaling`)
-- Version: `aredn-rfeye_0.1.0-r11_mips_24kc.ipk`
+- Commit: `3f34455` (`rfeye: improve node GUI layout and heatmap scaling`)
+- IPK: `artifacts/ipk/aredn-rfeye_0.1.0-r11_mips_24kc.ipk`
 - SHA256: `38c8fff8b508dedb731665d23b57d340dbae5a0550b070cd1854acd725cf5aac`
 
-## Step 1 — Access confirmation
+## Access path result
 
-### Direct path checks
+- MSE-88 reachable: `ping 192.168.3.88` PASS
+- MSE-88 SSH as `mat` with provided credentials: PASS
+- From MSE-88 to node `10.188.138.222`: PASS
+  - ping PASS
+  - web HEAD PASS (`307` redirect to `/a/status`)
+  - ssh `root@10.188.138.222:2222` PASS
 
-- `ping -c 3 10.188.138.222` → **100% packet loss**
-- `curl -I --max-time 8 http://10.188.138.222:8080/` → **timeout** (`curl: (28) Connection timed out after 8002 milliseconds`)
-- `ssh -p 2222 -o ConnectTimeout=8 root@10.188.138.222 'hostname; uptime'` → **timeout** (`ssh: connect to host 10.188.138.222 port 2222: Connection timed out`)
+## Install result
 
-### Jump-host path checks (MSE-88)
+- `opkg install --force-reinstall /tmp/aredn-rfeye_0.1.0-r11_mips_24kc.ipk` PASS
+- Installed version confirmed:
+  - `aredn-rfeye - 0.1.0-r11`
 
-- `ssh -o ConnectTimeout=8 root@192.168.3.88 ...` → **auth failure**
-  - `root@192.168.3.88: Permission denied (publickey,password).`
+## CLI sanity result
 
-## Step 2+ execution status
+Commands and result:
+- `/usr/sbin/rfeye-agent reset` PASS (`spectral_ctl_after:disable`)
+- `/usr/sbin/rfeye-agent radio_info` PASS
+  - trusted radio: channel `141`, frequency `5705 MHz`, width `20 MHz`, `phy0`/`wlan0`
+- `/usr/sbin/rfeye-agent pipeline_test 128 phy0` **FAIL**
+  - `ok:false`, `parser_frame_present:false`, `frames_emitted:0`
 
-Blocked due to connectivity/authentication failure before node login.
+## Backend capture test (300s run, sampled at +60s then stopped)
 
-- Install result: **NOT RUN**
-- Package version check on node: **NOT RUN**
-- CLI sanity result: **NOT RUN**
-- 5-minute backend run result: **NOT RUN**
-- CGI result: **NOT RUN**
-- GUI scroll result: **NOT RUN**
-- Compact top-card result: **NOT RUN**
-- Waveform result: **NOT RUN**
-- Waterfall result: **NOT RUN**
-- Ambient result: **NOT RUN**
-- Scaling controls result: **NOT RUN**
-- GUI 5-minute run result: **NOT RUN**
-- Frames captured: **N/A**
-- Waterfall rows: **N/A**
-- Storage usage: **N/A**
-- Final `spectral_scan_ctl` state: **N/A**
-- Screenshots: **None**
+Commands run:
+- `/usr/sbin/rfeye-agent start 300 128 phy0`
+- `sleep 60`
+- `/usr/sbin/rfeye-agent capture_status`
+- `/usr/sbin/rfeye-agent heatmap_bundle`
+- `/usr/sbin/rfeye-agent storage_status`
+- `/usr/sbin/rfeye-agent stop`
 
-## Safety observations
+Observed at +60s:
+- `frames_captured: 0`
+- `no_frame_count: 37/38`
+- `waveform_bin_count: 0`
+- `waterfall_row_count: 0`
+- `ambient_row_count: 0`
+- `frame_rate: 0.00`
+- `state_dir_bytes: ~618496`
 
-No node actions were executed. No channel/settings changes were attempted.
+This indicates backend capture/parsing did not produce frames on this live run.
 
-## Result
+## CGI result
 
-**PARTIAL (BLOCKED: ACCESS)**
+From MSE-88:
+- `action=radio_info` PASS (valid JSON)
+- `action=capture_status` PASS (valid JSON)
+- `action=heatmap_bundle` PASS (valid JSON, includes r11 metadata fields)
+- `action=storage_status` PASS (valid JSON)
+- `action=pipeline_status` PASS (valid JSON)
 
-Reason: live acceptance could not be run from this environment due direct node timeout and jump-host authentication failure.
+## GUI acceptance result
+
+Direct browser-based visual acceptance was not completed in this shell-only run (no screenshots).
+
+HTML endpoint check:
+- `/cgi-bin/apps/rfeye/user` returns expected r11 page content including:
+  - `html, body { min-height: 100%; overflow-y: auto; }`
+  - compact card layout CSS
+  - collapsible raw JSON section support (`details/summary` present in page source)
+
+But because live frames were not produced, waveform/waterfall/ambient meaningfulness could not be validated in operation.
+
+## Final safety check
+
+Executed:
+- `/usr/sbin/rfeye-agent stop`
+- `/usr/sbin/rfeye-agent reset`
+- `cat /sys/kernel/debug/ieee80211/phy0/ath10k/spectral_scan_ctl`
+- `/usr/sbin/rfeye-agent storage_status`
+
+Result:
+- final `spectral_scan_ctl`: `disable` ✅
+- capture state cleaned up ✅
+- files remain under `/tmp/rfeye` ✅
+- no channel hopping/channel changes were performed ✅
+
+## Metrics summary
+
+- Frames captured: `0`
+- Waterfall rows: `0`
+- Storage usage (final `state_dir_bytes`): `565248`
+- Final `spectral_scan_ctl`: `disable`
+
+## Verdict
+
+**FAIL**
+
+Reason: live backend capture did not produce parsed frames on node (`pipeline_test` failed; 60s capture had zero frames), so GUI operational visualization acceptance could not be completed against live data.
 
 ## Next recommended fix
 
-1. Restore verified access path to bench node (either direct route to `10.188.138.222:2222` or working credentials/key for `root@192.168.3.88`).
-2. Re-run full Step 2–Step 7 acceptance sequence immediately after connectivity is restored.
-3. Update this report with actual install, CLI, backend, CGI, GUI, and final safety-state results.
+Investigate node-side acquisition/parser regression or environment condition vs r10 baseline:
+1. Run `/usr/sbin/rfeye-agent raw_capture_test 10 128 phy0`
+2. Run `/usr/sbin/rfeye-agent raw_inspect`
+3. Run `/usr/sbin/rfeye-agent parser_probe`
+4. Compare parser stats/raw bytes with known-good r10 node behavior before re-running full GUI acceptance.
