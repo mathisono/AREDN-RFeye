@@ -1,45 +1,63 @@
 # AREDN RFeye
 
-AREDN RFeye is an AREDN-native RF spectrum visibility tool for ath10k-based 802.11ac nodes. The goal is to provide an AirView-like test view inside an AREDN node while keeping heavier analysis, replay, and classifiers on a Linux workstation.
+AREDN RFeye is a lightweight RF spectrum-visibility app for AREDN/OpenWrt nodes using ath10k-based 802.11ac radios.
+
+The project goal is an AirView-like **node-side test view** for AREDN operators while keeping heavier replay, reporting, and classifier work on a future Linux Workbench.
 
 ## Current status
 
-The node package now includes:
+RFeye is in active bench-node development.
 
-- `rfeye-agent` with a controlled acquisition loop (fixed cadence, no overlapping snapshot/capture cycles).
-- A RAM-backed server-side frame buffer under `/tmp/rfeye` for normalized FFT display frames.
-- Capture session state model: `idle`, `running`, `complete`, `error`.
-- Server-side normalized UI products:
-  - current waveform trace
-  - rolling waterfall matrix
-  - rolling ambient minute-peak matrix
-- `action=heatmap_bundle` JSON endpoint for low-rate browser updates.
-- `rfeye-survey` for survey counters and utilization estimates.
-- `rfeye-spectral-parse` for ath10k TLV-to-JSON FFT frames.
-- A lightweight AREDN app GUI at `/cgi-bin/apps/rfeye/user` with 3 structural panels.
-- Parser smoke tests and GitHub Actions smoke workflow.
+Implemented so far:
 
-## Safety rules
+- AREDN/OpenWrt package: `aredn-rfeye`
+- Node GUI: `/cgi-bin/apps/rfeye/user`
+- Safe node controller: `rfeye-agent`
+- Survey/utilization helper: `rfeye-survey`
+- ath10k spectral parser: `rfeye-spectral-parse`
+- Trusted radio info from `iw dev <iface> info`
+- Capture/session model under `/tmp/rfeye`
+- Server-side products for waveform, waterfall, and ambient heat-map views
+- JSON API endpoint for low-rate UI updates
+- Raw capture inspection and parser probe diagnostics
+- Test `.ipk` artifacts under `artifacts/ipk/`
 
-- Current-channel/background scan only.
-- No automatic channel hopping.
-- No continuous flash writes.
-- Captures stay in `/tmp`.
-- Capture runtime and byte count are capped.
-- Unsupported hardware must return clear JSON errors.
+Current main blocker:
 
-## Current field-test limitations
+- On the first tested node, `spectral_scan0` returns nonzero raw data, but the parser currently emits zero valid FFT frames. r6 diagnostics suggest a raw framing/layout mismatch remains.
 
-- This is still a node test tool, not a calibrated analyzer.
-- ath10k spectral availability and survey counters vary by hardware/driver build.
-- Ambient panel currently uses a lightweight minute-peak rollup, not long-term calibrated noise analytics.
-- Heavy analytics/replay/classification are intentionally deferred to Linux Workbench workflows.
+## Safety model
 
-## Radio frequency display
+RFeye is designed to be conservative on a mesh node:
 
-RFeye uses `iw dev <iface> info` radio state as the trusted source for the current channel, frequency, width, and IBSS/SSID. The ath10k FFT frame frequency metadata is kept for debugging, but it is sanity-checked and may be ignored if implausible. Invalid FFT metadata such as `768 MHz` should be displayed only as ignored/debug frame metadata, never as the node operating channel.
+- No automatic channel hopping
+- No channel changes
+- Current-channel/background spectral scan only
+- Capture data stays under `/tmp/rfeye`
+- No continuous flash writes
+- Runtime and byte counts are capped
+- Unsupported hardware returns JSON diagnostics instead of failing silently
 
-## Local parser test
+## Tested node so far
+
+First bench node:
+
+```text
+Node: KJ6DZB-WSB-ACdish5
+AREDN/OpenWrt: AREDN 4.26.1.0 r29087-d9c5716d1d
+Kernel: Linux 6.6.119 mips
+Radio: phy0 / wlan0 / IBSS AREDN-20-v3
+Channel: 141
+Frequency: 5705 MHz
+Width: 20 MHz
+Result: package/UI/API work; parser framing issue remains
+```
+
+See the test reports in `docs/` for details.
+
+## Quick local test
+
+Run the parser smoke test from the repo root:
 
 ```sh
 scripts/test-parser-smoke.sh
@@ -51,9 +69,9 @@ Expected:
 RFeye parser smoke test passed
 ```
 
-## Build an OpenWrt/AREDN `.ipk`
+## Build an OpenWrt/AREDN package
 
-Copy the package into an AREDN/OpenWrt build tree:
+Copy the package into an AREDN/OpenWrt or SDK tree:
 
 ```sh
 RFeye=$HOME/src/AREDN-RFeye
@@ -63,7 +81,7 @@ rsync -av --delete "$RFeye/package/aredn-rfeye/" \
   "$AREDN/package/aredn-rfeye/"
 ```
 
-Build:
+Build only RFeye:
 
 ```sh
 cd "$AREDN"
@@ -72,7 +90,7 @@ make package/aredn-rfeye/compile V=s
 find bin -name 'aredn-rfeye*.ipk' -print
 ```
 
-## Install on a bench node
+Install on a bench node:
 
 ```sh
 scp bin/packages/*/*/aredn-rfeye_*.ipk root@localnode.local.mesh:/tmp/
@@ -80,51 +98,30 @@ ssh root@localnode.local.mesh
 opkg install /tmp/aredn-rfeye_*.ipk
 ```
 
-Manual checks before enabling service:
+## Basic node checks
+
+Run these before enabling any service:
 
 ```sh
 /usr/sbin/rfeye-agent status
+/usr/sbin/rfeye-agent radio_info
 /usr/sbin/rfeye-survey survey
 /usr/sbin/rfeye-survey utilization
-/usr/sbin/rfeye-agent snapshot
-/usr/sbin/rfeye-agent capture_status
-/usr/sbin/rfeye-survey raw
+/usr/sbin/rfeye-agent raw_capture_test 10 128 phy0
+/usr/sbin/rfeye-agent raw_inspect
+/usr/sbin/rfeye-agent parser_probe
 ```
 
-Optional service enable:
+For the current parser issue, the most important commands are:
 
 ```sh
-uci set rfeye.main.enabled='1'
-uci commit rfeye
-/etc/init.d/rfeye enable
-/etc/init.d/rfeye start
+/usr/sbin/rfeye-agent raw_capture_test 10 128 phy0
+/usr/sbin/rfeye-agent raw_inspect
+/usr/sbin/rfeye-agent parser_probe
+/usr/lib/rfeye/rfeye-spectral-parse --probe --input /tmp/rfeye/raw-test.tlv
 ```
 
-## UI structure (current)
-
-The node GUI is organized as:
-
-1. **Waveform View** (top): current normalized spectrum line.
-2. **Waterfall View** (middle): rolling recent-frame heat map.
-3. **Ambient Noise Level** (bottom): rolling minute-peak heat map.
-
-The control/status area also shows trusted channel/frequency/width, capture state, frame count, no-frame count, and capture bytes.
-
-Color scale is currently fixed in code (`min_dbm`/`max_dbm`, blue→green/yellow→red).
-
-## Capture cadence model
-
-When capture is started, `rfeye-agent` runs a bounded loop:
-
-1. sample at fixed interval (`sample_interval_ms`)
-2. parse one frame
-3. normalize to fixed UI bins (`ui_bins`)
-4. append to ring/waterfall/ambient products in `/tmp/rfeye`
-5. publish low-rate JSON via `heatmap_bundle`
-
-If a cycle returns no frame, `no_frame_count` increments and prior heat-map history remains intact.
-
-## Test the node GUI
+## Node GUI
 
 Open:
 
@@ -132,47 +129,81 @@ Open:
 http://localnode.local.mesh/cgi-bin/apps/rfeye/user
 ```
 
-The GUI provides:
+The GUI is structured as:
 
-- Start/stop/reset controls.
-- Test duration selector.
-- PHY and bin controls.
-- Waveform/waterfall/ambient panels.
-- Capture/session counters and trusted radio info.
-- Raw JSON output for debugging.
+1. **Waveform** — current normalized spectrum trace
+2. **Waterfall** — rolling recent-frame heat map
+3. **Ambient** — slower minute-peak heat map
 
-## CGI/API tests
+The GUI also displays trusted radio info, capture state, frame counters, no-frame count, and raw JSON diagnostics.
 
-```sh
-curl 'http://localnode.local.mesh/cgi-bin/apps/rfeye/data/agent.sh?action=status'
-curl 'http://localnode.local.mesh/cgi-bin/apps/rfeye/data/agent.sh?action=radio_info'
-curl 'http://localnode.local.mesh/cgi-bin/apps/rfeye/data/agent.sh?action=ui_state'
-curl 'http://localnode.local.mesh/cgi-bin/apps/rfeye/data/agent.sh?action=waveform'
-curl 'http://localnode.local.mesh/cgi-bin/apps/rfeye/data/agent.sh?action=waterfall'
-curl 'http://localnode.local.mesh/cgi-bin/apps/rfeye/data/agent.sh?action=ambient'
-curl 'http://localnode.local.mesh/cgi-bin/apps/rfeye/data/agent.sh?action=heatmap_bundle'
-curl 'http://localnode.local.mesh/cgi-bin/apps/rfeye/data/agent.sh?action=survey'
-curl 'http://localnode.local.mesh/cgi-bin/apps/rfeye/data/agent.sh?action=utilization'
-curl 'http://localnode.local.mesh/cgi-bin/apps/rfeye/data/agent.sh?action=snapshot'
-curl 'http://localnode.local.mesh/cgi-bin/apps/rfeye/data/agent.sh?action=capture_status'
-curl 'http://localnode.local.mesh/cgi-bin/apps/rfeye/data/agent.sh?action=survey_raw'
-curl 'http://localnode.local.mesh/cgi-bin/apps/rfeye/data/agent.sh?action=start&seconds=5&bins=128&phy=phy0'
-curl 'http://localnode.local.mesh/cgi-bin/apps/rfeye/data/agent.sh?action=stop'
-```
+## JSON API
 
-## Commit built package artifact
-
-For early node testing only, OpenClaw may commit a built `.ipk` under:
+The CGI bridge is:
 
 ```text
-artifacts/ipk/
+/cgi-bin/apps/rfeye/data/agent.sh
 ```
 
-Use a filename that includes package version, architecture, and build date where possible. Do not commit full OpenWrt build trees or temporary build output.
+Useful actions:
 
-More detailed instructions are in:
+```text
+action=status
+action=radio_info
+action=ui_state
+action=start&seconds=10&bins=128&phy=phy0
+action=stop
+action=reset
+action=capture_status
+action=heatmap_bundle
+action=waveform
+action=waterfall
+action=ambient
+action=survey
+action=utilization
+action=survey_raw
+action=raw_inspect
+action=parser_probe
+action=acquisition_debug
+```
 
+Example:
+
+```sh
+curl 'http://localnode.local.mesh/cgi-bin/apps/rfeye/data/agent.sh?action=heatmap_bundle'
+```
+
+## Radio frequency display
+
+RFeye treats `iw dev <iface> info` as authoritative for the node operating channel, frequency, width, and IBSS/SSID.
+
+FFT frame frequency metadata is kept for debugging only. Implausible FFT metadata, such as `768 MHz`, is marked invalid and must not be displayed as the real node frequency.
+
+## Current development focus
+
+The next development pass should focus on parser/framing refinement:
+
+- Preserve real hardware captures as fixtures
+- Probe alternate TLV/header variants
+- Add resync scanning
+- Identify whether the raw stream is upstream ath10k TLV, ath10k-ct variation, relayfs padded data, or another layout
+- Make `rfeye-spectral-parse` decode real `spectral_scan0` output from the test node
+
+Avoid adding classifier or UI polish until valid frames populate the waveform/waterfall/ambient products.
+
+## Documentation
+
+Key docs:
+
+- `docs/ARCHITECTURE.md`
+- `docs/ROADMAP.md`
 - `docs/BUILD_AND_NODE_TEST.md`
 - `docs/OPENCLAW_IPK_TASK.md`
 - `docs/NODE_TEST_REPORT_TEMPLATE.md`
-- `docs/TEST_RESULTS_KJ6DZB_WSB_ACDISH5.md`
+- `docs/TEST_RESULTS_KJ6DZB_WSB_ACDISH5_R4.md`
+- `docs/TEST_RESULTS_KJ6DZB_WSB_ACDISH5_R5.md`
+- `docs/TEST_RESULTS_KJ6DZB_WSB_ACDISH5_R6.md`
+
+## License
+
+GPL-3.0-or-later
