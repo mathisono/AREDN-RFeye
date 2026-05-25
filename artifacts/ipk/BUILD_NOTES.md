@@ -1,5 +1,28 @@
 # RFeye IPK Build Notes
 
+## r11 build (2026-05-25 UTC)
+
+- Commit: pending local commit (`rfeye: improve node GUI layout and heatmap scaling`)
+- Package: `aredn-rfeye 0.1.0-r11`
+- IPK filename: `aredn-rfeye_0.1.0-r11_mips_24kc.ipk`
+- SHA256: `38c8fff8b508dedb731665d23b57d340dbae5a0550b070cd1854acd725cf5aac`
+- Build tree path: `/home/bill/src/build-sdk/openwrt-sdk-ath79-generic`
+- Build commands:
+  - `rsync -av --delete /home/bill/src/AREDN-RFeye/package/aredn-rfeye/ /home/bill/src/build-sdk/openwrt-sdk-ath79-generic/package/aredn-rfeye/`
+  - `LD_LIBRARY_PATH=/home/bill/src/local-gawk/lib make package/aredn-rfeye/clean V=s`
+  - `LD_LIBRARY_PATH=/home/bill/src/local-gawk/lib make package/aredn-rfeye/compile V=s`
+- Validation results before build:
+  - `sh -n package/aredn-rfeye/files/usr/sbin/rfeye-agent` ✅
+  - `sh -n package/aredn-rfeye/files/usr/sbin/rfeye-survey` ✅
+  - `sh -n package/aredn-rfeye/files/www/cgi-bin/apps/rfeye/data/agent.sh` ✅
+  - `sh -n package/aredn-rfeye/files/www/cgi-bin/apps/rfeye/user` ✅
+  - `cc -Wall -Wextra -o /tmp/rfeye-spectral-parse src/rfeye_spectral_parse.c` ✅
+  - `sh scripts/test-parser-smoke.sh` ✅
+  - `sh scripts/test-hardware-fixture-probe.sh` ✅
+- Build notes:
+  - r11 implements scroll-safe compact GUI cards, improved waveform/waterfall/ambient rendering, display scaling controls, and additional `heatmap_bundle` metadata for UI labeling/scaling.
+- Node retest: pending (not yet executed in this run).
+
 ## r10 build (2026-05-25 UTC)
 
 - Commit: `f07ee34` (`rfeye: add long-run stability instrumentation`)

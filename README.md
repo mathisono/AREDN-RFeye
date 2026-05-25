@@ -24,8 +24,8 @@ Implemented so far:
 
 Current milestone:
 
-- r9 is the first live-waterfall milestone. On KJ6DZB-WSB-ACdish5, a 10-second timed capture produced 8 frames, waterfall rows populated, export/download worked, repeated start/stop did not wedge capture, and `spectral_scan_ctl` ended at `disable`.
-- r10 focuses on 5-minute long-run stability, bounded `/tmp/rfeye` growth, storage/memory/load visibility, and GUI responsiveness.
+- r10 passed 5-minute stability testing on KJ6DZB-WSB-ACdish5 with bounded `/tmp/rfeye` growth and final `spectral_scan_ctl=disable`.
+- r11 focuses on GUI usability + display calibration: scroll behavior, compact top cards, meaningful waveform/waterfall/ambient rendering, and lightweight scaling controls.
 
 ## Current field-test limitations
 
@@ -140,13 +140,15 @@ Open:
 http://localnode.local.mesh/cgi-bin/apps/rfeye/user
 ```
 
-The GUI is structured as:
+Current UI panels:
 
-1. **Waveform** — current normalized spectrum trace
-2. **Waterfall** — rolling recent-frame heat map
-3. **Ambient** — slower minute-peak heat map
+1. **Waveform** — spectrum-style trace with display min/max labels and trusted radio frequency context.
+2. **Waterfall** — rolling recent-frame heat map with legend and visible row count.
+3. **Ambient** — slower minute-peak history, including in-progress row visibility when available.
 
-The GUI also displays trusted radio info, capture state, frame counters, no-frame count, elapsed/remaining time, frame cadence, storage usage, and raw JSON diagnostics. It preserves the last visible products while waiting for the next frame.
+Top cards are compact (Controls / Radio / Diagnostics), raw JSON is collapsed by default, and page scrolling is enabled for desktop/mobile.
+
+Display scaling (auto/manual) is intended for **visual contrast only**; values are approximate/relative and not calibrated lab RF measurements.
 
 ## JSON API
 
@@ -193,12 +195,13 @@ FFT frame frequency metadata is kept for debugging only. Implausible FFT metadat
 
 ## Current development focus
 
-r10 targets long-run stability on the first node before adding a second node or classifier work:
+r11 prioritizes operator usability + visualization calibration after r10 stability:
 
-- Support 5-minute capture runs with bounded waterfall/ring products.
-- Measure `/tmp/rfeye` usage, latest capture size, memory, and load.
-- Keep GUI polling lightweight and avoid overlapping browser fetches.
-- Keep `--resync` parser path, current channel only, and safe final `spectral_scan_ctl=disable`.
+- Keep 5-minute stability behavior and bounded `/tmp/rfeye` products.
+- Improve web UI scrolling and compact top cards.
+- Make waveform/waterfall/ambient visually meaningful with legends/labels.
+- Add lightweight auto/manual display scale controls.
+- Keep current-channel-only behavior (`no channel hopping`, `no channel changes`) and safe final `spectral_scan_ctl=disable`.
 
 5-minute soak test:
 
@@ -207,9 +210,7 @@ r10 targets long-run stability on the first node before adding a second node or 
 /usr/sbin/rfeye-agent soak_test 300 128 phy0
 ```
 
-A successful summary includes nonzero `frames_captured` when spectral data is available, bounded `waterfall_rows`/`ring_frames`, `state_dir_bytes`, and `final_spectral_ctl":"disable"`. See `docs/LONG_RUN_TESTING.md`.
-
-Avoid adding classifier or UI polish until valid frames populate the waveform/waterfall/ambient products.
+See `docs/LONG_RUN_TESTING.md` and `docs/UI_NOTES.md`.
 
 ## Documentation
 
@@ -218,11 +219,11 @@ Key docs:
 - `docs/ARCHITECTURE.md`
 - `docs/ROADMAP.md`
 - `docs/BUILD_AND_NODE_TEST.md`
+- `docs/UI_NOTES.md`
 - `docs/OPENCLAW_IPK_TASK.md`
 - `docs/NODE_TEST_REPORT_TEMPLATE.md`
-- `docs/TEST_RESULTS_KJ6DZB_WSB_ACDISH5_R4.md`
-- `docs/TEST_RESULTS_KJ6DZB_WSB_ACDISH5_R5.md`
-- `docs/TEST_RESULTS_KJ6DZB_WSB_ACDISH5_R6.md`
+- `docs/TEST_RESULTS_KJ6DZB_WSB_ACDISH5_R10.md`
+- `docs/TEST_RESULTS_KJ6DZB_WSB_ACDISH5_R11.md`
 
 ## License
 

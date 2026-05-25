@@ -234,6 +234,12 @@ extract_json_number() {
   [ -n "$v" ] && echo "$v" || echo 0
 }
 
+extract_json_decimal() {
+  local json="$1" key="$2" v
+  v="$(printf '%s\n' "$json" | sed -n "s/.*\"$key\":\(-\{0,1\}[0-9][0-9]*\(\.[0-9][0-9]*\)\{0,1\}\).*/\1/p" | head -n1)"
+  [ -n "$v" ] && echo "$v" || echo 0
+}
+
 extract_json_bool() {
   local json="$1" key="$2" v
   v="$(printf '%s\n' "$json" | sed -n "s/.*\"$key\":\(true\|false\).*/\1/p" | head -n1)"
@@ -466,6 +472,26 @@ count_csv_fields() {
 count_json_rows_file() {
   local file="$1"
   [ -s "$file" ] && awk 'NF{n++} END{print n+0}' "$file" || echo 0
+}
+
+json_file_oldest_timestamp() {
+  local file="$1"
+  [ -s "$file" ] || { echo 0; return 0; }
+  sed -n 's/.*"timestamp":\(-\{0,1\}[0-9][0-9]*\).*/\1/p' "$file" | head -n1 | awk '{print int($1+0)}'
+}
+
+json_file_newest_timestamp() {
+  local file="$1"
+  [ -s "$file" ] || { echo 0; return 0; }
+  sed -n 's/.*"timestamp":\(-\{0,1\}[0-9][0-9]*\).*/\1/p' "$file" | tail -n1 | awk '{print int($1+0)}'
+}
+
+waveform_bin_count() {
+  local csv
+  [ -s "$WAVEFORM_FILE" ] || { echo 0; return 0; }
+  csv="$(sed -n 's/.*"bins":\[\([^]]*\)\].*/\1/p' "$WAVEFORM_FILE" | head -n1)"
+  [ -n "$csv" ] || { echo 0; return 0; }
+  count_csv_fields "$csv"
 }
 
 pipeline_status_json() {
@@ -735,7 +761,8 @@ capture_cycle_sequence() {
 }
 
 render_bundle() {
-  local r c w wf_rows amb_rows min_dbm max_dbm acq err_val amb_pending amb_current metrics
+  local r c w wf_rows amb_rows min_dbm max_dbm acq amb_pending amb_current metrics
+  local pipe wf_row_count amb_row_count wave_bins oldest_ts newest_ts sample_ms frame_rate last_age
   min_dbm="$(cfg_get min_dbm "$DEFAULT_MIN_DBM")"
   max_dbm="$(cfg_get max_dbm "$DEFAULT_MAX_DBM")"
   r="$(radio_json)"
@@ -746,16 +773,23 @@ render_bundle() {
   amb_pending="$(ambient_pending_bool)"
   amb_current="$(ambient_current_json)"
   acq="$( [ -s "$STATE_DIR/acquisition_debug.json" ] && cat "$STATE_DIR/acquisition_debug.json" || acquisition_debug_json )"
-  err_val="$(session_num no_frame_count 0)"
   if [ "$(session_num frames_captured 0)" -eq 0 ] 2>/dev/null; then
     c="$(printf '%s' "$c" | sed 's/"error":"[^"]*"/"error":"no parsed frames"/')"
   fi
 
-  local pipe
   pipe="$(pipeline_status_json)"
   metrics="$(capture_metrics_json)"
+  wf_row_count="$(count_json_rows_file "$WATERFALL_FILE")"
+  amb_row_count="$(ambient_row_count)"
+  wave_bins="$(waveform_bin_count)"
+  oldest_ts="$(json_file_oldest_timestamp "$WATERFALL_FILE")"
+  newest_ts="$(json_file_newest_timestamp "$WATERFALL_FILE")"
+  sample_ms="$(cfg_get sample_interval_ms "$DEFAULT_SAMPLE_INTERVAL_MS")"
+  frame_rate="$(extract_json_decimal "$metrics" frame_rate)"
+  last_age="$(extract_json_number "$metrics" last_frame_age_seconds)"
+
   cat > "$BUNDLE_FILE" <<JSON
-{"ok":true,"radio":$r,"capture":$c,"capture_metrics":$metrics,"waveform":$w,"waterfall":{"rows":$wf_rows,"min_dbm":$min_dbm,"max_dbm":$max_dbm},"ambient":{"rows":$amb_rows,"mode":"minute_peak","pending":$amb_pending,"current":$amb_current},"acquisition_debug":$acq,"pipeline":$pipe}
+{"ok":true,"radio":$r,"capture":$c,"capture_metrics":$metrics,"display_min_dbm":$min_dbm,"display_max_dbm":$max_dbm,"waveform_bin_count":$wave_bins,"waterfall_row_count":$wf_row_count,"ambient_row_count":$amb_row_count,"oldest_row_timestamp":$oldest_ts,"newest_row_timestamp":$newest_ts,"sample_interval_ms":$sample_ms,"frame_rate":$frame_rate,"last_frame_age_seconds":$last_age,"waveform":$w,"waterfall":{"rows":$wf_rows,"min_dbm":$min_dbm,"max_dbm":$max_dbm},"ambient":{"rows":$amb_rows,"mode":"minute_peak","pending":$amb_pending,"current":$amb_current},"acquisition_debug":$acq,"pipeline":$pipe}
 JSON
   cat "$BUNDLE_FILE"
 }
