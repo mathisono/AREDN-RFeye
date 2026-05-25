@@ -2,7 +2,7 @@
 
 ## r10 build (2026-05-25 UTC)
 
-- Commit: pending local commit
+- Commit: `f07ee34` (`rfeye: add long-run stability instrumentation`)
 - Package: `aredn-rfeye 0.1.0-r10`
 - IPK filename: `aredn-rfeye_0.1.0-r10_mips_24kc.ipk`
 - SHA256: `6491834c7a10d572e24327fb4fa5e42656d19812dd3edbeaf4ac5b613f07f11b`
