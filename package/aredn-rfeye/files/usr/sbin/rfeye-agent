@@ -51,6 +51,88 @@ resolve_phy() {
   echo "$phy"
 }
 
+resolve_iface() {
+  local phy="${1:-$(resolve_phy)}" iface
+  for n in /sys/class/ieee80211/$phy/device/net/*; do
+    [ -e "$n" ] || continue
+    iface="$(basename "$n")"
+    [ -n "$iface" ] && { echo "$iface"; return 0; }
+  done
+  if command -v iw >/dev/null 2>&1; then
+    iw dev 2>/dev/null | awk '/Interface / {print $2; exit}'
+  fi
+}
+
+channel_from_freq() {
+  local f="$1"
+  [ "$f" -gt 0 ] 2>/dev/null || { echo 0; return 0; }
+  if [ "$f" -eq 2484 ] 2>/dev/null; then echo 14; return 0; fi
+  if [ "$f" -ge 2412 ] && [ "$f" -le 2472 ] 2>/dev/null; then echo $(( (f - 2407) / 5 )); return 0; fi
+  if [ "$f" -ge 5000 ] && [ "$f" -le 5900 ] 2>/dev/null; then echo $(( (f - 5000) / 5 )); return 0; fi
+  if [ "$f" -ge 5955 ] && [ "$f" -le 7115 ] 2>/dev/null; then echo $(( (f - 5950) / 5 )); return 0; fi
+  echo 0
+}
+
+width_from_text() {
+  sed -n 's/.*width:[[:space:]]*\([0-9][0-9]*\).*/\1/p; s/.*channel width:[[:space:]]*\([0-9][0-9]*\).*/\1/p' | head -n1
+}
+
+radio_info_cmd() {
+  local phy iface src info freq=0 chan=0 width=0 ssid="" mode="" raw iwinfo_out cfgfreq cfgchan cfgwidth cfgssid cfgmode
+  phy="$(resolve_phy)"
+  iface="$(resolve_iface "$phy")"
+  [ -n "$iface" ] || { echo "{\"ok\":false,\"error\":\"wireless interface unavailable\",\"phy\":\"$(json_escape "$phy")\"}"; return 1; }
+
+  if command -v iw >/dev/null 2>&1; then
+    info="$(iw dev "$iface" info 2>/dev/null || true)"
+    if [ -n "$info" ]; then
+      src="iw dev $iface info"
+      freq="$(printf '%s\n' "$info" | awk '/channel [0-9]+ \(/ {gsub(/[()]/,"",$3); print $3; exit} /freq:/ {print $2; exit}')"
+      chan="$(printf '%s\n' "$info" | awk '/channel [0-9]+ / {print $2; exit}')"
+      width="$(printf '%s\n' "$info" | width_from_text)"
+      ssid="$(printf '%s\n' "$info" | sed -n 's/^[[:space:]]*ssid[[:space:]]\+//p; s/^[[:space:]]*mesh id[[:space:]]\+//p' | head -n1)"
+      mode="$(printf '%s\n' "$info" | awk '/^[[:space:]]*type / {print $2; exit}')"
+    fi
+    if { [ -z "$freq" ] || [ "$freq" = 0 ]; } && raw="$(iw dev "$iface" survey dump 2>/dev/null || true)" && [ -n "$raw" ]; then
+      src="iw dev $iface survey dump"
+      freq="$(printf '%s\n' "$raw" | awk '/in use/ {print $2; exit}')"
+    fi
+  fi
+
+  if { [ -z "$freq" ] || [ "$freq" = 0 ]; } && command -v iwinfo >/dev/null 2>&1; then
+    iwinfo_out="$(iwinfo "$iface" info 2>/dev/null || true)"
+    if [ -n "$iwinfo_out" ]; then
+      src="iwinfo $iface info"
+      freq="$(printf '%s\n' "$iwinfo_out" | sed -n 's/.*Frequency:[[:space:]]*\([0-9.]*\)[[:space:]]*GHz.*/\1/p' | awk '{printf "%d\n", ($1 * 1000) + 0.5; exit}')"
+      chan="$(printf '%s\n' "$iwinfo_out" | sed -n 's/.*Channel:[[:space:]]*\([0-9][0-9]*\).*/\1/p' | head -n1)"
+      mode="$(printf '%s\n' "$iwinfo_out" | sed -n 's/.*Mode:[[:space:]]*\([^ ]*\).*/\1/p' | head -n1)"
+      ssid="$(printf '%s\n' "$iwinfo_out" | sed -n 's/.*ESSID:[[:space:]]*"\(.*\)".*/\1/p' | head -n1)"
+    fi
+  fi
+
+  if { [ -z "$freq" ] || [ "$freq" = 0 ]; } && command -v uci >/dev/null 2>&1; then
+    src="/etc/config/wireless"
+    cfgfreq="$(uci -q get wireless.radio0.frequency 2>/dev/null || true)"
+    cfgchan="$(uci -q get wireless.radio0.channel 2>/dev/null || true)"
+    cfgwidth="$(uci -q get wireless.radio0.htmode 2>/dev/null | sed 's/[^0-9]//g' || true)"
+    cfgssid="$(uci -q get wireless.@wifi-iface[0].ssid 2>/dev/null || true)"
+    cfgmode="$(uci -q get wireless.@wifi-iface[0].mode 2>/dev/null || true)"
+    freq="$cfgfreq"; chan="$cfgchan"; width="$cfgwidth"; ssid="$cfgssid"; mode="$cfgmode"
+  fi
+
+  [ -n "$freq" ] || freq=0
+  [ -n "$chan" ] || chan="$(channel_from_freq "$freq")"
+  [ -n "$width" ] || width=0
+  case "$mode" in IBSS|ibss|adhoc|Ad-Hoc) mode="IBSS" ;; managed) mode="managed" ;; monitor) mode="monitor" ;; AP|ap) mode="AP" ;; esac
+  if [ "$freq" -lt 2300 ] || [ "$freq" -gt 7100 ] 2>/dev/null; then
+    echo "{\"ok\":false,\"error\":\"radio frequency unavailable or implausible\",\"phy\":\"$(json_escape "$phy")\",\"iface\":\"$(json_escape "$iface")\",\"frequency_mhz\":$freq,\"source\":\"$(json_escape "${src:-unavailable}")\"}"
+    return 1
+  fi
+  cat <<JSON
+{"ok":true,"phy":"$(json_escape "$phy")","iface":"$(json_escape "$iface")","channel":$chan,"frequency_mhz":$freq,"width_mhz":$width,"ssid_or_ibss":"$(json_escape "$ssid")","mode":"$(json_escape "$mode")","source":"$(json_escape "${src:-unknown}")"}
+JSON
+}
+
 ath_dir() { echo "/sys/kernel/debug/ieee80211/$1/ath10k"; }
 
 scan_disable() {
@@ -283,8 +365,9 @@ stop_cmd() {
 }
 
 snapshot_cmd() {
-  local phy="$(resolve_phy)" snap_bytes parser
+  local phy="$(resolve_phy)" snap_bytes parser radio_json
   parser="/usr/lib/rfeye/rfeye-spectral-parse"
+  radio_json="$(radio_info_cmd 2>/dev/null || echo '{"ok":false,"error":"radio info unavailable"}')"
   snap_bytes="$(cfg_get snapshot_bytes "$DEFAULT_SNAPSHOT_BYTES")"
   [ "$snap_bytes" -gt 0 ] 2>/dev/null || snap_bytes="$DEFAULT_SNAPSHOT_BYTES"
   [ "$snap_bytes" -gt "$DEFAULT_MAX_CAPTURE_BYTES" ] && snap_bytes="$DEFAULT_MAX_CAPTURE_BYTES"
@@ -299,7 +382,7 @@ snapshot_cmd() {
   [ -x "$parser" ] && parser_exists="true"
 
   if [ ! -f "$scan0" ] || [ ! -x "$parser" ]; then
-    echo "{\"ok\":false,\"error\":\"unsupported\",\"phy\":\"$(json_escape "$phy")\",\"scan0_exists\":$scan0_exists,\"ctl_exists\":$ctl_exists,\"parser_exists\":$parser_exists,\"bytes_read\":0,\"parser_output_present\":false}"
+    echo "{\"ok\":false,\"error\":\"unsupported\",\"phy\":\"$(json_escape "$phy")\",\"radio\":$radio_json,\"scan0_exists\":$scan0_exists,\"ctl_exists\":$ctl_exists,\"parser_exists\":$parser_exists,\"bytes_read\":0,\"parser_output_present\":false}"
     return 1
   fi
 
@@ -322,11 +405,11 @@ snapshot_cmd() {
   rm -f "$tmp"
 
   if [ -z "$frame" ]; then
-    echo "{\"ok\":false,\"error\":\"no frame\",\"phy\":\"$(json_escape "$phy")\",\"scan0_exists\":$scan0_exists,\"ctl_exists\":$ctl_exists,\"parser_exists\":$parser_exists,\"bytes_read\":$bytes_read,\"parser_output_present\":false,\"tries\":$tries}"
+    echo "{\"ok\":false,\"error\":\"no frame\",\"phy\":\"$(json_escape "$phy")\",\"radio\":$radio_json,\"scan0_exists\":$scan0_exists,\"ctl_exists\":$ctl_exists,\"parser_exists\":$parser_exists,\"bytes_read\":$bytes_read,\"parser_output_present\":false,\"tries\":$tries}"
     return 1
   fi
 
-  echo "{\"ok\":true,\"frame\":$frame,\"diagnostics\":{\"scan0_exists\":$scan0_exists,\"ctl_exists\":$ctl_exists,\"parser_exists\":$parser_exists,\"bytes_read\":$bytes_read,\"parser_output_present\":true,\"tries\":$tries}}"
+  echo "{\"ok\":true,\"radio\":$radio_json,\"frame\":$frame,\"diagnostics\":{\"scan0_exists\":$scan0_exists,\"ctl_exists\":$ctl_exists,\"parser_exists\":$parser_exists,\"bytes_read\":$bytes_read,\"parser_output_present\":true,\"tries\":$tries}}"
 }
 
 daemon_cmd() {
@@ -349,12 +432,13 @@ shift || true
 case "$cmd" in
   status) status_cmd ;;
   capture_status) capture_status_cmd ;;
+  radio_info) radio_info_cmd ;;
   start) start_cmd "$@" ;;
   stop) stop_cmd ;;
   snapshot) snapshot_cmd ;;
   daemon) daemon_cmd ;;
   *)
-    echo '{"ok":false,"error":"usage: rfeye-agent {status|capture_status|start [seconds bins phy]|stop|snapshot|daemon}"}'
+    echo '{"ok":false,"error":"usage: rfeye-agent {status|capture_status|radio_info|start [seconds bins phy]|stop|snapshot|daemon}"}'
     exit 2
     ;;
 esac

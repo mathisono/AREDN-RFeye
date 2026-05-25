@@ -26,6 +26,9 @@ case "$ACTION" in
   capture_status)
     exec "$AGENT" capture_status
     ;;
+  radio_info)
+    exec "$AGENT" radio_info
+    ;;
   start)
     exec "$AGENT" start "${SECONDS_ARG:-10}" "${BINS_ARG:-128}" "${PHY_ARG:-phy0}"
     ;;

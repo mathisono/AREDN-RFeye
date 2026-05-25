@@ -81,8 +81,10 @@ cat <<'HTML'
 
     <div class="rfeye-card">
       <h3>Snapshot info</h3>
-      <div>Freq: <b id="freq">--</b></div>
-      <div>Width: <b id="width">--</b></div>
+      <div>Radio freq: <b id="radiofreq">--</b></div>
+      <div>Channel: <b id="radiochan">--</b></div>
+      <div>Width: <b id="radiowidth">--</b></div>
+      <div class="muted">Frame freq: <b id="framefreq">--</b></div>
       <div>RSSI: <b id="rssi">--</b></div>
       <div>Max bin: <b id="maxbin">--</b></div>
     </div>
@@ -106,6 +108,7 @@ cat <<'HTML'
   let timer = null;
   let stopAt = 0;
   let frames = 0;
+  let radioInfo = null;
 
   function qs(action) {
     const phy = encodeURIComponent(document.getElementById('phy').value || 'phy0');
@@ -157,8 +160,37 @@ cat <<'HTML'
     ctx.stroke();
   }
 
+  function frameFreqValid(f) {
+    const v = Number(f && f.freq1_mhz);
+    if (!Number.isFinite(v) || v < 2300 || v > 7100) return false;
+    if (f && f.freq_valid === false) return false;
+    const w = Number(f && f.width_mhz);
+    if (Number.isFinite(w) && w > 0 && ![20, 40, 80, 160].includes(w)) return false;
+    return true;
+  }
+
+  function applyRadioInfo(r) {
+    if (r && r.ok) {
+      radioInfo = r;
+      document.getElementById('radiofreq').textContent = r.frequency_mhz ? `${r.frequency_mhz} MHz` : '--';
+      document.getElementById('radiochan').textContent = r.channel || '--';
+      document.getElementById('radiowidth').textContent = r.width_mhz ? `${r.width_mhz} MHz` : '--';
+    } else {
+      document.getElementById('radiofreq').textContent = 'unavailable';
+      document.getElementById('radiochan').textContent = '--';
+      document.getElementById('radiowidth').textContent = '--';
+    }
+  }
+
+  async function updateRadioInfo() {
+    const r = await getJson(qs('radio_info'));
+    applyRadioInfo(r);
+    return r;
+  }
+
   function updateFrame(j) {
     raw.textContent = JSON.stringify(j, null, 2);
+    if (j.radio) applyRadioInfo(j.radio);
     if (!j.ok || !j.frame) {
       setState(j.error || 'no frame', false);
       return;
@@ -167,8 +199,7 @@ cat <<'HTML'
     drawFFT(f.bins || []);
     frames += 1;
     framesEl.textContent = String(frames);
-    document.getElementById('freq').textContent = f.freq1_mhz ? `${f.freq1_mhz} MHz` : '--';
-    document.getElementById('width').textContent = f.width_mhz ? `${f.width_mhz} MHz` : '--';
+    document.getElementById('framefreq').textContent = frameFreqValid(f) ? `${f.freq1_mhz} MHz` : 'invalid / ignored';
     document.getElementById('rssi').textContent = f.rssi ?? '--';
     document.getElementById('maxbin').textContent = f.max_index ?? '--';
     setState('receiving snapshot frames', true);
@@ -230,6 +261,8 @@ cat <<'HTML'
   document.getElementById('snapshot').addEventListener('click', pollSnapshot);
   setInterval(updateUtilization, 6000);
   updateUtilization();
+  updateRadioInfo();
+  setInterval(updateRadioInfo, 30000);
   drawFFT([]);
 })();
 </script>

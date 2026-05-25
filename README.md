@@ -6,7 +6,7 @@ AREDN RFeye is an AREDN-native RF spectrum visibility tool for ath10k-based 802.
 
 The node package now includes:
 
-- `rfeye-agent` for safe status/start/stop/snapshot capture control.
+- `rfeye-agent` for safe status/start/stop/snapshot capture control and trusted radio-state reporting.
 - `rfeye-survey` for survey counters and utilization estimates.
 - `rfeye-spectral-parse` for ath10k TLV-to-JSON FFT frames.
 - A lightweight AREDN app GUI at `/cgi-bin/apps/rfeye/user`.
@@ -29,6 +29,10 @@ First bench-node testing on `KJ6DZB-WSB-ACdish5` showed the core ath10k spectral
 - Survey counters may be zero or unchanged on some ath10k/IBSS nodes; `rfeye-survey` returns clean diagnostic JSON in that case.
 - CGI snapshot timing is still under test; failures should return diagnostic JSON rather than a bare `no frame`.
 - A 10-second capture succeeded on the first tested node and produced `/tmp/rfeye/latest.tlv`; shorter captures may need polling via `capture_status` before assuming the file exists.
+
+## Radio frequency display
+
+RFeye uses `iw dev <iface> info` radio state as the trusted source for the current channel, frequency, width, and IBSS/SSID. The ath10k FFT frame frequency metadata is kept for debugging, but it is sanity-checked and may be ignored if implausible. Invalid FFT metadata such as `768 MHz` should be displayed only as ignored/debug frame metadata, never as the node operating channel.
 
 ## Local parser test
 
@@ -112,6 +116,7 @@ The GUI provides:
 
 ```sh
 curl 'http://localnode.local.mesh/cgi-bin/apps/rfeye/data/agent.sh?action=status'
+curl 'http://localnode.local.mesh/cgi-bin/apps/rfeye/data/agent.sh?action=radio_info'
 curl 'http://localnode.local.mesh/cgi-bin/apps/rfeye/data/agent.sh?action=survey'
 curl 'http://localnode.local.mesh/cgi-bin/apps/rfeye/data/agent.sh?action=utilization'
 curl 'http://localnode.local.mesh/cgi-bin/apps/rfeye/data/agent.sh?action=snapshot'

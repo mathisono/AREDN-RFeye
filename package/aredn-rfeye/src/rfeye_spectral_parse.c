@@ -94,8 +94,16 @@ int main(int argc, char **argv) {
       break;
     }
 
-    /* ATH_FFT_SAMPLE_ATH10K == 3 */
-    if (type == 3 && len >= 26) {
+    /* ATH_FFT_SAMPLE_ATH10K == 3. Keep raw metadata for debugging,
+     * but do not trust it blindly: some captures can be misaligned or
+     * partially malformed while still containing usable FFT bins. */
+    if (type == 3) {
+      if (len < 26) {
+        if (debug) fprintf(stderr, "short ATH10K FFT sample len=%u\n", len);
+        free(buf);
+        continue;
+      }
+
       uint8_t chan_width_mhz = buf[0];
       uint16_t freq1 = be16(&buf[1]);
       uint16_t freq2 = be16(&buf[3]);
@@ -107,14 +115,27 @@ int main(int argc, char **argv) {
       uint8_t rssi = buf[22];
 
       size_t bins_len = (size_t)(len - 26);
+      int bins_len_plausible = (bins_len == 64 || bins_len == 128 || bins_len == 256 ||
+                                (bins_len >= 32 && bins_len <= 512));
+      if (!bins_len_plausible) {
+        if (debug) fprintf(stderr, "implausible ATH10K FFT bins_len=%zu len=%u\n", bins_len, len);
+        free(buf);
+        continue;
+      }
+
+      int width_plausible = (chan_width_mhz == 20 || chan_width_mhz == 40 ||
+                             chan_width_mhz == 80 || chan_width_mhz == 160);
+      int freq_plausible = (freq1 >= 2300 && freq1 <= 7100);
+      int freq_valid = width_plausible && freq_plausible;
       size_t out_bins = bins_len;
       if (bins_limit >= 0 && (size_t)bins_limit < out_bins) out_bins = (size_t)bins_limit;
 
-      printf("{\"phy\":\"%s\",\"freq1_mhz\":%u,\"freq2_mhz\":%u,\"width_mhz\":%u,\"noise\":%d,\"rssi\":%u,\"max_index\":%d,\"max_magnitude\":%u,\"tsf\":%llu,\"bins\":[",
+      printf("{\"phy\":\"%s\",\"freq1_mhz\":%u,\"freq2_mhz\":%u,\"width_mhz\":%u,\"freq_valid\":%s,\"noise\":%d,\"rssi\":%u,\"max_index\":%d,\"max_magnitude\":%u,\"tsf\":%llu,\"bins\":[",
              phy,
              freq1,
              freq2,
              chan_width_mhz,
+             freq_valid ? "true" : "false",
              (int)noise,
              (unsigned)rssi,
              (int)max_index,
@@ -132,6 +153,7 @@ int main(int argc, char **argv) {
         break;
       }
     }
+
 
     free(buf);
   }
