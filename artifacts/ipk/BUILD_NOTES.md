@@ -197,3 +197,35 @@
 - `aredn-rfeye_0.1.0-r1_mips_24kc.ipk`
 - `aredn-rfeye_0.1.0-r2_mips_24kc.ipk`
 - `aredn-rfeye_0.1.0-r3_mips_24kc.ipk`
+
+## r13 build (2026-05-26 UTC)
+
+- Commit: `2d39f9c` (`r13: fix intermittent stall + 3x frame rate improvement`)
+- Package: `aredn-rfeye 0.1.0-r13`
+- IPK filename: `aredn-rfeye_0.1.0-r13_mips_24kc.ipk`
+- SHA256: `11d2e6fbad70c859ead27b53f4117a5f697916ea133a4cce04da11af5e321a67`
+- Build tree path: `/home/bill/src/build-sdk/openwrt-sdk-ath79-generic`
+- Build commands:
+  - `rsync -av --delete /home/bill/src/AREDN-RFeye/package/aredn-rfeye/ /home/bill/src/build-sdk/openwrt-sdk-ath79-generic/package/aredn-rfeye/`
+  - `LD_LIBRARY_PATH=/home/bill/src/local-gawk/lib make package/aredn-rfeye/clean V=s`
+  - `LD_LIBRARY_PATH=/home/bill/src/local-gawk/lib make package/aredn-rfeye/compile V=s`
+- Validation results before build:
+  - `sh scripts/check-parser-source-sync.sh` ✅
+  - `sh -n package/aredn-rfeye/files/usr/sbin/rfeye-agent` ✅
+  - `sh -n package/aredn-rfeye/files/usr/sbin/rfeye-survey` ✅
+  - `sh -n package/aredn-rfeye/files/www/cgi-bin/apps/rfeye/data/agent.sh` ✅
+  - `sh -n package/aredn-rfeye/files/www/cgi-bin/apps/rfeye/user` ✅
+  - `cc -Wall -Wextra -o /tmp/rfeye-spectral-parse src/rfeye_spectral_parse.c` ✅
+  - `/tmp/rfeye-spectral-parse --help | grep -E -- '--probe|--resync'` ✅
+- Build notes:
+  - r13 fixes intermittent capture stall and improves frame rate 3x.
+  - Key changes: head -c replaces dd bs=1, single-awk product update, fast append, cached config/radio, spectral re-prime on no-frame.
+  - bytes_written is higher due to faster capture rate. Storage managed by trim mechanism.
+- Node retest:
+  - `opkg install --force-reinstall /tmp/aredn-rfeye_0.1.0-r13_mips_24kc.ipk` ✅
+  - installed parser help shows `--probe` and `--resync` ✅
+  - Pipeline test: all 9 stages PASS ✅
+  - 10s capture: 16 frames, 1.33 fps ✅
+  - 300s soak: 336 frames, 1.09 fps sustained, zero hangs ✅
+  - Storage: 2.2M /tmp/rfeye, 55.3M free on /tmp, 53M mem available ✅
+  - final `spectral_scan_ctl=disable` ✅

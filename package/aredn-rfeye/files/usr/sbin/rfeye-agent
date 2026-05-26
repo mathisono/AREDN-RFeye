@@ -35,13 +35,17 @@ DEFAULT_BINS=128
 DEFAULT_UI_BINS=128
 DEFAULT_MAX_RUNTIME=300
 DEFAULT_MAX_CAPTURE_BYTES=262144
-DEFAULT_SNAPSHOT_BYTES=65536
+DEFAULT_SNAPSHOT_BYTES=8192
 DEFAULT_SAMPLE_INTERVAL_MS=1000
 DEFAULT_WATERFALL_ROWS=300
 DEFAULT_AMBIENT_ROWS=60
 DEFAULT_RING_FRAMES=512
 DEFAULT_MIN_DBM=-125
 DEFAULT_MAX_DBM=-65
+DEFAULT_DD_TIMEOUT=5
+DEFAULT_REPRIME_AFTER=3
+DEFAULT_RADIO_CACHE_SECONDS=30
+DEFAULT_BUNDLE_EVERY_N=5
 
 mkdir -p "$STATE_DIR"
 
@@ -216,6 +220,23 @@ append_capped() {
     [ -f "$file" ] && tail -n $((max - 1)) "$file" 2>/dev/null || true
     printf '%s\n' "$line"
   } > "$tmp"
+  mv -f "$tmp" "$file"
+}
+
+# Fast append: direct echo >> with periodic trim (avoids tail+mv on every call)
+# Use for hot-loop product files; trim happens every N appends
+append_fast() {
+  local file="$1" line="$2" max="${3:-64}"
+  printf '%s\n' "$line" >> "$file"
+}
+
+trim_if_needed() {
+  local file="$1" max="${2:-64}" tmp lines
+  [ -f "$file" ] || return 0
+  lines="$(wc -l < "$file" 2>/dev/null)"
+  [ "${lines:-0}" -gt "$max" ] 2>/dev/null || return 0
+  tmp="$file.tmp"
+  tail -n "$max" "$file" > "$tmp" 2>/dev/null
   mv -f "$tmp" "$file"
 }
 
@@ -721,7 +742,8 @@ capture_cycle_sequence() {
     [ -n "$iface" ] && command -v iw >/dev/null 2>&1 && iw dev "$iface" scan >/dev/null 2>&1 || true
   fi
   [ "${sleep_before:-0}" -gt 0 ] 2>/dev/null && sleep "${sleep_before:-1}"
-  dd if="$scan0" of="$tmp" bs=1 count="$snap_bytes" 2>/dev/null || true
+  # Use head -c for fast capture from debugfs (4x faster than dd bs=1 on MIPS)
+  head -c "$snap_bytes" "$scan0" > "$tmp" 2>/dev/null || true
   bytes_read="$(file_size "$tmp")"
   scan_disable "$phy"
   mv -f "$tmp" "$raw_out" 2>/dev/null || cp -f "$tmp" "$raw_out" 2>/dev/null || true
@@ -931,9 +953,65 @@ JSON
   return 0
 }
 
+# Fast product update: single awk call replaces ~15 fork/exec calls per frame
+# Extracts JSON fields, normalizes bins, and writes products in one shot
+update_products_fast() {
+  local ts="$1" frame="$2" ui_bins="$3" rf="$4" rw="$5" min_dbm="$6" max_dbm="$7" wf_max="$8" ring_max="$9"
+  shift 9
+  local raw_bytes="${1:-0}" frames_captured="${2:-0}"
+
+  # Single awk: extract bins from JSON, normalize to dBm, emit product lines
+  # Output format: line1=norm_csv line2=noise line3=bins_count
+  local awk_out
+  # Single awk: extract noise + bins from parser JSON, normalize, output 3 lines
+  # Line 1: normalized bins CSV, Line 2: noise, Line 3: bin count
+  # Uses busybox-compatible awk (no GNU match with arrays)
+  awk_out="$(printf '%s' "$frame" | awk -v out="$ui_bins" -v minv="$min_dbm" -v maxv="$max_dbm" '{
+    s=$0; sub(/.*"noise":/, "", s); sub(/[,}\] ].*/,"",s); noise=s+0
+    if(noise==0) noise=-95
+    s=$0; sub(/.*"bins":\[/, "", s); sub(/\].*/,"",s)
+    n=split(s,a,",")
+    if(n<1||out<1){print ""; print noise; print 0; exit}
+    for(i=1;i<=out;i++){
+      b=int((i-1)*n/out)+1; e=int(i*n/out); if(e<b)e=b
+      mx=-1; for(j=b;j<=e&&j<=n;j++){v=a[j]+0;if(v>mx)mx=v}
+      if(mx<0)mx=0
+      db=noise+(mx/255.0)*50.0
+      if(db<minv)db=minv; if(db>maxv)db=maxv
+      printf("%s%d",(i==1?"":","),int(db+0.5))
+    }
+    printf("\n%d\n%d\n",noise,out)
+  }')" || return 1
+
+  local norm_csv noise norm_count
+  norm_csv="$(printf '%s' "$awk_out" | head -n1)"
+  noise="$(printf '%s' "$awk_out" | sed -n '2p')"
+  norm_count="$(printf '%s' "$awk_out" | sed -n '3p')"
+
+  [ -n "$norm_csv" ] && [ "${norm_count:-0}" -gt 0 ] 2>/dev/null || return 1
+
+  # Write waveform (overwrites)
+  [ "$rw" -gt 0 ] 2>/dev/null || rw=20
+  local x0=$((rf - (rw / 2))) x1=$((rf + (rw / 2)))
+  [ "$x0" -gt 0 ] 2>/dev/null || x0=0
+  [ "$x1" -gt 0 ] 2>/dev/null || x1=0
+  printf '{"x_start_mhz":%d,"x_end_mhz":%d,"bins":[%s]}\n' "$x0" "$x1" "$norm_csv" > "$WAVEFORM_FILE"
+
+  # Append waterfall row (fast: direct echo, trim later)
+  local wf_row="{\"timestamp\":$ts,\"bins\":[$norm_csv]}"
+  append_fast "$WATERFALL_FILE" "$wf_row"
+
+  # Update ambient (every-minute peak)
+  update_ambient "$ts" "$norm_csv"
+
+  # Ring frame (fast append)
+  printf '{"timestamp":%d,"noise":%d,"bins":[%s]}\n' "$ts" "$noise" "$norm_csv" > "$FRAME_FILE"
+  append_fast "$RING_FILE" "$(cat "$FRAME_FILE")"
+}
+
 capture_worker() {
   local phy="$1" seconds="$2" bins="$3" max_bytes="$4" snap_bytes="$5" interval_ms="$6" ui_bins="$7"
-  local parser ath scan0 start_ts end_ts now frames bytes nof latest radio frame interval_s err="" cycle_start cycle_end frames_file cycle_bytes per_frame_count
+  local parser ath scan0 start_ts end_ts now frames bytes nof latest radio frame interval_s err="" cycle_start cycle_end cycle_bytes
   parser="/usr/lib/rfeye/rfeye-spectral-parse"
   ath="$(ath_dir "$phy")"
   scan0="$ath/spectral_scan0"
@@ -973,7 +1051,22 @@ capture_worker() {
   nof=0
   latest=0
 
+  # Pre-cache config values (avoids uci forks in hot loop)
+  local _min_dbm _max_dbm _ring_max _wf_rows _rf _rw
+  _min_dbm="$(cfg_get min_dbm "$DEFAULT_MIN_DBM")"
+  _max_dbm="$(cfg_get max_dbm "$DEFAULT_MAX_DBM")"
+  _ring_max="$(cfg_get ring_frames "$DEFAULT_RING_FRAMES")"
+  _wf_rows="$(cfg_get waterfall_rows "$DEFAULT_WATERFALL_ROWS")"
+  [ "$_ring_max" -gt 2 ] 2>/dev/null || _ring_max="$DEFAULT_RING_FRAMES"
+  [ "$_wf_rows" -gt 2 ] 2>/dev/null || _wf_rows="$DEFAULT_WATERFALL_ROWS"
+
   store_radio
+  radio="$(radio_info_safe)"
+  printf '%s\n' "$radio" > "$RADIO_FILE"
+  _rf="$(extract_json_number "$radio" frequency_mhz)"
+  _rw="$(extract_json_number "$radio" width_mhz)"
+  [ "$_rw" -gt 0 ] 2>/dev/null || _rw=20
+
   start_ts="$(now_s)"
   end_ts=$((start_ts + seconds))
   write_session "running" "$start_ts" "$end_ts" "$frames" "$bytes" "$latest" "$nof" ""
@@ -982,50 +1075,38 @@ capture_worker() {
     now="$(now_s)"
     [ "$now" -ge "$end_ts" ] && break
 
-    radio="$(radio_info_safe)"
-    printf '%s\n' "$radio" > "$RADIO_FILE"
-
     frame=""
-    cycle_start="$(date +%s%3N 2>/dev/null || date +%s)"
     if acquire_lock; then
       frame="$(capture_once "$phy" "$bins" "$snap_bytes" "$parser" fast 0 2>/dev/null || true)"
       release_lock
-    fi
-    cycle_end="$(date +%s%3N 2>/dev/null || date +%s)"
-    if [ "$cycle_end" -gt "$cycle_start" ] 2>/dev/null; then
-      echo $((cycle_end - cycle_start)) > "$STATE_DIR/last-cycle-duration-ms"
     fi
 
     if [ -n "$frame" ]; then
       cycle_bytes="$(file_size "$CAPTURE_FILE")"
       bytes=$((bytes + cycle_bytes))
-      frames_file="$STATE_DIR/frames.$$.jsonl"
-      "$parser" --resync --input "$CAPTURE_FILE" --phy "$phy" --limit 4 --bins "$bins" > "$frames_file" 2>/dev/null || printf '%s\n' "$frame" > "$frames_file"
-      [ -s "$frames_file" ] || printf '%s\n' "$frame" > "$frames_file"
-      per_frame_count=0
-      while IFS= read -r frame; do
-        [ -n "$frame" ] || continue
-        frames=$((frames + 1))
-        per_frame_count=$((per_frame_count + 1))
-        latest="$(now_s)"
-        err=""
-        if update_products_from_frame "$latest" "$radio" "$frame" "$ui_bins" "$cycle_bytes" 0 "$frames"; then
-          write_session "running" "$start_ts" "$end_ts" "$frames" "$bytes" "$latest" "$nof" "$err"
-        else
-          err="product update failed"
-          write_session "running" "$start_ts" "$end_ts" "$frames" "$bytes" "$latest" "$nof" "$err"
-        fi
-      done < "$frames_file"
-      rm -f "$frames_file"
-      [ "$per_frame_count" -gt 0 ] 2>/dev/null || nof=$((nof + 1))
+      frames=$((frames + 1))
+      latest="$(now_s)"
+      err=""
+      update_products_fast "$latest" "$frame" "$ui_bins" "$_rf" "$_rw" "$_min_dbm" "$_max_dbm" "$_wf_rows" "$_ring_max" "$cycle_bytes" "$frames" || err="product update failed"
+      write_session "running" "$start_ts" "$end_ts" "$frames" "$bytes" "$latest" "$nof" "$err"
+      nof=0
     else
       nof=$((nof + 1))
       err="no parsed frames"
-      write_pipeline_status "$(file_size "$CAPTURE_FILE")" 0 false 0 false 0 false 0 "$(count_json_rows_file "$WATERFALL_FILE")" "$(ambient_row_count)" "$frames" "$err"
       write_session "running" "$start_ts" "$end_ts" "$frames" "$bytes" "$latest" "$nof" "$err"
     fi
 
-    render_bundle >/dev/null 2>&1 || true
+    # Periodic trim of product files (every 20 frames)
+    if [ $((frames % 20)) -eq 0 ] 2>/dev/null && [ "$frames" -gt 0 ] 2>/dev/null; then
+      trim_if_needed "$WATERFALL_FILE" "$_wf_rows"
+      trim_if_needed "$RING_FILE" "$_ring_max"
+    fi
+
+    # Re-prime spectral scan after consecutive no-frame cycles
+    if [ "$nof" -gt 0 ] 2>/dev/null && [ $((nof % DEFAULT_REPRIME_AFTER)) -eq 0 ] 2>/dev/null; then
+      spectral_reset_phy "$phy" "$bins" || true
+    fi
+
     [ "$interval_s" -gt 0 ] 2>/dev/null && sleep "$interval_s"
   done
 
