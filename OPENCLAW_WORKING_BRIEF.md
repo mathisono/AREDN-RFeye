@@ -16,9 +16,10 @@ Immediate next action:
 
 1. Confirm parser source sync.
 2. Confirm installed parser supports `--probe` and `--resync`.
-3. Reproduce or catch the intermittent stall.
-4. Save a triage report.
-5. Only then decide whether to add a minimal watchdog/re-prime fix.
+3. Verify the spectrum flow path end-to-end.
+4. Reproduce or catch the intermittent stall.
+5. Save a triage report.
+6. Only then decide whether to add a minimal watchdog/re-prime fix.
 
 ## Active milestone
 
@@ -162,6 +163,200 @@ cc -Wall -Wextra -o /tmp/rfeye-spectral-parse src/rfeye_spectral_parse.c
 sh scripts/test-parser-smoke.sh
 sh scripts/test-hardware-fixture-probe.sh
 ```
+
+## Spectrum flow verification
+
+Use this section to prove that spectrum data is actually flowing from the radio into the browser GUI.
+
+Target flow:
+
+```text
+spectral_scan0 -> raw TLV capture -> parser/resync -> normalized frame -> waveform/waterfall/ambient files -> heatmap_bundle JSON -> CGI -> browser GUI
+```
+
+### 1. Confirm the installed parser is correct
+
+On the node:
+
+```sh
+/usr/lib/rfeye/rfeye-spectral-parse --help | grep -E -- '--probe|--resync'
+```
+
+Expected: both `--probe` and `--resync` are present.
+
+If missing, stop. The installed package has the wrong parser.
+
+### 2. Confirm raw RF data exists
+
+```sh
+/usr/sbin/rfeye-agent reset
+/usr/sbin/rfeye-agent raw_capture_test 12 128 phy0
+/usr/sbin/rfeye-agent raw_inspect
+```
+
+Expected:
+
+- `bytes_read > 0`
+- `frames_emitted > 0`
+- `/tmp/rfeye/raw-test.tlv` exists and is non-empty
+
+Interpretation:
+
+- `bytes_read=0`: spectral capture / driver / scan control issue
+- `bytes_read>0` and `frames_emitted=0`: parser/framing issue
+- `bytes_read>0` and `frames_emitted>0`: raw capture and parser are working
+
+### 3. Confirm parser can decode live data
+
+```sh
+/usr/lib/rfeye/rfeye-spectral-parse \
+  --resync \
+  --stats \
+  --input /tmp/rfeye/raw-test.tlv \
+  --phy phy0 \
+  --limit 10 \
+  --bins 64
+```
+
+Expected: `frames_emitted > 0`.
+
+This proves raw spectral capture can be decoded into FFT frames.
+
+### 4. Confirm one full backend pipeline cycle
+
+```sh
+/usr/sbin/rfeye-agent pipeline_test 128 phy0
+/usr/sbin/rfeye-agent pipeline_status
+```
+
+Expected signs of success:
+
+- `raw_bytes > 0`
+- `parser_frame_present=true`
+- `normalized_bins_count=128`
+- `waveform_written=true`
+- `waterfall_rows >= 1`
+- `frames_captured >= 1`
+- `last_error=""`
+
+This proves parser output is reaching normalized GUI product files.
+
+### 5. Inspect the product files directly
+
+```sh
+ls -lh /tmp/rfeye/waveform.json
+ls -lh /tmp/rfeye/waterfall.ndjson
+ls -lh /tmp/rfeye/ambient.ndjson
+ls -lh /tmp/rfeye/heatmap_bundle.json
+
+cat /tmp/rfeye/waveform.json
+tail -5 /tmp/rfeye/waterfall.ndjson
+tail -5 /tmp/rfeye/ambient.ndjson
+```
+
+Expected:
+
+- `waveform.json` has non-empty `bins`
+- `waterfall.ndjson` has rows with bin data
+- `ambient.ndjson` has current or historical rows when available
+- `heatmap_bundle.json` exists and is non-empty
+
+This proves the GUI source data exists on disk.
+
+### 6. Confirm `heatmap_bundle` has usable data
+
+```sh
+/usr/sbin/rfeye-agent heatmap_bundle
+```
+
+Expected useful fields:
+
+- `waveform.bins` non-empty
+- `waterfall.rows` length greater than zero
+- `ambient.rows` or an in-progress/current row when available
+- `display_min_dbm`
+- `display_max_dbm`
+- `waveform_bin_count`
+- `waterfall_row_count`
+- `frame_rate`
+- `last_frame_age_seconds`
+
+This proves the backend bundle is ready for browser use.
+
+### 7. Confirm CGI passes the bundle to the browser
+
+From a machine that can reach the node web server:
+
+```sh
+curl 'http://10.188.138.222:8080/cgi-bin/apps/rfeye/data/agent.sh?action=heatmap_bundle'
+curl 'http://10.188.138.222:8080/cgi-bin/apps/rfeye/data/agent.sh?action=pipeline_status'
+curl 'http://10.188.138.222:8080/cgi-bin/apps/rfeye/data/agent.sh?action=capture_status'
+```
+
+Expected:
+
+- HTTP 200
+- valid JSON
+- same row/frame counts as CLI
+
+If CLI works but CGI does not, the problem is CGI routing or environment.
+
+### 8. Confirm the browser receives data
+
+Open:
+
+```text
+http://10.188.138.222:8080/cgi-bin/apps/rfeye/user
+```
+
+If possible, check browser developer tools:
+
+- Network tab shows `heatmap_bundle` requests
+- Requests return HTTP 200
+- Response JSON has `waveform.bins` and `waterfall.rows`
+- No JavaScript errors
+
+If CGI JSON has data but the canvas stays blank, the issue is JavaScript rendering/scaling, not RF capture.
+
+### 9. Run a short live GUI/backend capture
+
+On the node:
+
+```sh
+/usr/sbin/rfeye-agent reset
+/usr/sbin/rfeye-agent start 60 128 phy0
+sleep 20
+/usr/sbin/rfeye-agent capture_status
+/usr/sbin/rfeye-agent pipeline_status
+/usr/sbin/rfeye-agent heatmap_bundle
+```
+
+In the browser, verify:
+
+- frame count increases
+- last frame age updates
+- waterfall rows accumulate
+- waveform changes or remains visibly stable
+- ambient panel shows current/in-progress data when available
+
+Stop safely:
+
+```sh
+/usr/sbin/rfeye-agent stop
+cat /sys/kernel/debug/ieee80211/phy0/ath10k/spectral_scan_ctl
+```
+
+Expected final state: `disable`.
+
+### 10. Spectrum flow decision tree
+
+- `raw_capture_test` has 0 bytes -> spectral_scan0 / driver / scan control issue
+- `raw_capture_test` has bytes but 0 frames -> parser/framing issue
+- parser emits frames but `pipeline_test` fails -> normalization/product-writer issue
+- `pipeline_test` passes but `heatmap_bundle` is empty -> bundle rendering/state assembly issue
+- CLI `heatmap_bundle` has data but CGI does not -> CGI bridge issue
+- CGI has data but GUI is blank -> browser JavaScript/canvas/scaling issue
+- GUI works briefly then stalls -> intermittent capture/feed stall; capture `capture_status`, `pipeline_status`, `heatmap_bundle`, and `raw_capture_test` at the stall moment
 
 ## Node triage commands
 
