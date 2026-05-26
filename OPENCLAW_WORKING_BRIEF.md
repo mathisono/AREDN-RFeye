@@ -1,56 +1,203 @@
 # OpenClaw Working Brief
 
 ## Project
+
 AREDN-RFeye
 
+## Current status
+
+RFeye is a node-side AREDN/OpenWrt RF spectrum visibility prototype for ath10k-based 802.11ac radios.
+
+The project has moved from initial scaffold to a working short-run node prototype. The current priority is reliability and intermittent capture/feed stall triage, not new RF features.
+
 ## Active milestone
-r11 — GUI usability + live backend regression triage
+
+r12 — parser packaging sync fix and intermittent stall triage
 
 ## Guardrails
-- No classifier work
+
+- No classifier work yet
 - No channel hopping
 - No channel changes
 - Captures remain under `/tmp/rfeye`
-- End state must be `spectral_scan_ctl=disable`
+- No continuous capture writes to flash
+- End state after stop/reset must be `spectral_scan_ctl=disable`
+- Do not add new features until the intermittent feed stall is understood
 
-## Current validated state
-- r11 GUI/source work committed and pushed (`3f34455`).
-- r11 live acceptance report updated and pushed (`cca8762`) with FAIL due to zero parsed frames.
-- Live connectivity path via MSE-88 is now functional.
+## Known-good state
 
-## Focused backend triage findings (no production code changes)
+### r10
 
-Live node: `10.188.138.222` via `MSE-88`.
+r10 is the last fully proven stability milestone.
 
-### Acquisition layer
-- Raw capture works: `raw_capture_test` produced `bytes_read=262144` and `/tmp/rfeye/raw-test.tlv` present.
-- During timed start, `/tmp/rfeye/latest.tlv` observed at 32768 bytes.
-- So capture activation and ingest are not completely dead.
+Results on KJ6DZB-WSB-ACdish5:
 
-### Parser layer
-- `raw_capture_test` result: `ok:false`, `frames_emitted:0`, `error:no parsed frames`.
-- `pipeline_test 128 phy0`: parser stage fails (`parse_resync:false`).
-- Node parser usage output lacks `--resync` and `--probe` options.
-- Node parser SHA256: `ec5ae34d464d7fd40d2c76d357b7d2cc10452ff7e487f3f664c57b45f9981881`.
+- 5-minute manual run: PASS
+- `frames_captured=80`
+- `no_frame_count=0`
+- `waterfall_rows=80`
+- `/tmp/rfeye` about 772 KiB
+- `soak_test 300 128 phy0`: PASS
+- `soak_test frames_captured=100`
+- `state_dir_bytes=823296`
+- final `spectral_scan_ctl=disable`
+- no channel hopping or channel changes
 
-### r10 vs r11 package parser diff
-- Extracted `r10` IPK parser binary strings include `--probe` and `--resync`.
-- Extracted `r11` IPK parser binary strings do **not** include these options.
-- Repo sources diverged:
-  - `src/rfeye_spectral_parse.c` = newer parser (supports `--probe/--resync`)
-  - `package/aredn-rfeye/src/rfeye_spectral_parse.c` = older parser (no `--probe/--resync`)
-- Build path compiles parser from `package/aredn-rfeye/src/...`, causing r11 package to ship incompatible parser for current `rfeye-agent` invocation.
+### r11
 
-## Regression layer and candidate root cause
-- **Identified regression layer:** Parser packaging/build-input mismatch (not radio channel config; not final cleanup path).
-- **Primary root-cause candidate:** stale parser source under `package/aredn-rfeye/src/` compiled into r11 IPK while agent expects `--resync/--probe` capable parser.
+r11 added GUI and display improvements:
 
-## Safety confirmation
-- Final live state confirmed: `spectral_scan_ctl=disable`.
-- Artifacts remained under `/tmp/rfeye`.
-- No channel hopping/channel changes performed.
+- page scrolling
+- compact Controls / Radio / Diagnostics cards
+- collapsible raw JSON
+- waveform labels and trusted radio frequency context
+- waterfall and ambient legends / no-data states
+- auto/manual display scaling controls
+- improved bundle metadata
 
-## Next minimal code-change target (not yet applied)
-1. Synchronize parser source used by package build (ensure compiled source includes `--resync/--probe`).
-2. Rebuild IPK and verify parser `--help` on node includes `--resync/--probe`.
-3. Re-run backend + GUI live acceptance.
+r11 source/build validation passed, but live acceptance was intermittent.
+
+## r12 parser packaging fix
+
+A release-blocking issue was found after r11.
+
+The package build had been compiling the stale parser source here:
+
+```text
+package/aredn-rfeye/src/rfeye_spectral_parse.c
+```
+
+instead of the newer canonical parser here:
+
+```text
+src/rfeye_spectral_parse.c
+```
+
+The stale packaged parser did not support:
+
+```text
+--probe
+--resync
+```
+
+while `rfeye-agent` expected the resync-capable parser path.
+
+r12 fixed this by syncing the package parser source from the canonical parser source and adding a source-sync validation check.
+
+Before building any IPK, run:
+
+```sh
+sh scripts/check-parser-source-sync.sh
+```
+
+The installed parser on the node must show `--probe` and `--resync` in help output.
+
+## Last known runtime observation
+
+After the parser sync fix, the system briefly recovered and produced:
+
+```text
+parser_mode=resync
+frames_captured=16
+frame_rate=0.52/s
+last_frame_age=4s
+final spectral_scan_ctl=disable
+```
+
+It later stalled again, so the remaining issue appears intermittent and runtime-related rather than a basic parser capability problem.
+
+## Current blocker
+
+Intermittent capture/feed stall.
+
+Potential layers to distinguish:
+
+1. `spectral_scan0` stops producing parseable data
+2. capture loop exits or hangs
+3. parser still works but pipeline stops updating
+4. lock/pid/end files become stale
+5. storage/memory issue
+6. GUI/API polling issue
+7. spectral scan state issue
+
+## Immediate next work
+
+1. Finish the intermittent stall triage report.
+2. Capture current state when the stall occurs:
+   - `capture_status`
+   - `pipeline_status`
+   - `storage_status`
+   - `acquisition_debug`
+   - `parser_probe`
+   - `raw_capture_test`
+3. Determine whether the stall is spectral-source, parser, loop, product-writer, or GUI/API related.
+4. Decide whether a minimal watchdog/re-prime fix is warranted.
+5. Avoid feature work until this is understood.
+
+## Node under test
+
+```text
+Node: KJ6DZB-WSB-ACdish5
+IP: 10.188.138.222
+SSH: port 2222
+Web: http://10.188.138.222:8080
+Jump host when needed: MSE-88 / 192.168.3.88
+AREDN/OpenWrt: AREDN 4.26.1.0 r29087-d9c5716d1d
+Kernel: Linux 6.6.119 mips
+Radio: phy0 / wlan0 / IBSS AREDN-20-v3
+Channel: 141
+Frequency: 5705 MHz
+Width: 20 MHz
+```
+
+## Useful commands
+
+Parser sync:
+
+```sh
+sh scripts/check-parser-source-sync.sh
+```
+
+Local validation:
+
+```sh
+sh -n package/aredn-rfeye/files/usr/sbin/rfeye-agent
+sh -n package/aredn-rfeye/files/usr/sbin/rfeye-survey
+sh -n package/aredn-rfeye/files/www/cgi-bin/apps/rfeye/data/agent.sh
+sh -n package/aredn-rfeye/files/www/cgi-bin/apps/rfeye/user
+cc -Wall -Wextra -o /tmp/rfeye-spectral-parse src/rfeye_spectral_parse.c
+sh scripts/test-parser-smoke.sh
+sh scripts/test-hardware-fixture-probe.sh
+```
+
+Node triage:
+
+```sh
+/usr/sbin/rfeye-agent capture_status
+/usr/sbin/rfeye-agent pipeline_status
+/usr/sbin/rfeye-agent storage_status
+/usr/sbin/rfeye-agent acquisition_debug
+/usr/sbin/rfeye-agent heatmap_bundle
+/usr/sbin/rfeye-agent raw_capture_test 12 128 phy0
+/usr/sbin/rfeye-agent parser_probe
+cat /sys/kernel/debug/ieee80211/phy0/ath10k/spectral_scan_ctl
+```
+
+Safe reset:
+
+```sh
+/usr/sbin/rfeye-agent stop
+/usr/sbin/rfeye-agent reset
+cat /sys/kernel/debug/ieee80211/phy0/ath10k/spectral_scan_ctl
+```
+
+## Definition of done for next patch
+
+- Triage report completed
+- Root layer identified or narrowed
+- Any code fix is minimal and justified by evidence
+- Parser source sync check remains in validation path
+- No channel hopping
+- No channel changes
+- Captures remain under `/tmp/rfeye`
+- Final `spectral_scan_ctl=disable`
