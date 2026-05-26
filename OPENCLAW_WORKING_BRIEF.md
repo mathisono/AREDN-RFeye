@@ -8,22 +8,30 @@ RFeye is a node-side AREDN/OpenWrt RF spectrum visibility prototype for ath10k-b
 
 ## Start here
 
+**r13 is complete and deployed.** The intermittent capture stall is fixed and frame rate is ~1 fps sustained.
+
 Do **not** add new RF features yet.
 
-The next OpenClaw session should focus on the intermittent capture/feed stall. r12 already fixed the stale packaged-parser issue, so do not spend time re-litigating the r11 parser mismatch unless the node parser again lacks `--probe` / `--resync`.
+### Important: spectral capture is current-channel only
 
-Immediate next action:
+The ath10k spectral scan captures FFT data for the **current operating channel only** (typically 20 MHz on AREDN). Each frame is 72 FFT bins across that channel. This is NOT a wideband sweep across 5 GHz. Wideband capture would require channel hopping, which is prohibited.
 
-1. Confirm parser source sync.
-2. Confirm installed parser supports `--probe` and `--resync`.
-3. Verify the spectrum flow path end-to-end.
-4. Reproduce or catch the intermittent stall.
-5. Save a triage report.
-6. Only then decide whether to add a minimal watchdog/re-prime fix.
+### Next session focus
+
+- UI polish (r14 candidate)
+- Storage monitoring for runs >5 minutes
+- Production hardening (logging, error paths)
+- Documentation updates
+
+### Recent history
+
+- **r13** — fixed intermittent stall, 3× frame rate (0.37→1.09 fps), head-c capture, single-awk products, spectral re-prime
+- **r12** — fixed stale parser packaging
+- **r11** — GUI polish, intermittent acceptance
 
 ## Active milestone
 
-r12 complete; intermittent capture/feed stall triage in progress.
+r13 complete. UI and docs polish for r14 next.
 
 ## Guardrails
 

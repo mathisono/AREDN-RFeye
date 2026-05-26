@@ -1,52 +1,67 @@
 # AREDN RFeye
 
-AREDN RFeye is a lightweight RF spectrum-visibility app for AREDN/OpenWrt nodes using ath10k-based 802.11ac radios.
+Node-side RF spectrum visibility for AREDN/OpenWrt mesh nodes with ath10k 802.11ac radios.
 
-The project goal is an AirView-like node-side test view for AREDN operators while keeping heavier replay, reporting, and classifier work on a future Linux Workbench.
+RFeye shows a real-time spectral view of your node's **current operating channel** using the ath10k hardware FFT engine. Each frame captures 72 FFT bins across the channel bandwidth (typically 20 MHz). This is a single-channel diagnostic tool — it does not scan or hop across the 5 GHz band.
 
-## Current status
+## Current release: r13
 
-RFeye is in active bench-node development.
+**r13** fixes the intermittent capture stall from r11/r12 and improves frame rate from ~0.4 fps to **~1 fps sustained** on MIPS hardware.
 
-Implemented so far:
+### Quick start
 
-- AREDN/OpenWrt package: `aredn-rfeye`
-- Node GUI at `/cgi-bin/apps/rfeye/user`
-- Safe node controller: `rfeye-agent`
-- Survey/utilization helper: `rfeye-survey`
-- ath10k spectral parser: `rfeye-spectral-parse`
-- Trusted radio info from `iw dev <iface> info`
-- Capture/session products under `/tmp/rfeye`
-- Waveform, waterfall, and ambient heat-map views
-- JSON API endpoint for low-rate UI updates
-- Raw capture inspection and parser probe diagnostics
-- Test `.ipk` artifacts under `artifacts/ipk/`
+```sh
+# Copy IPK to the node, then:
+opkg install --force-reinstall /tmp/aredn-rfeye_0.1.0-r13_mips_24kc.ipk
 
-## Milestone status
+# Open the GUI:
+# http://<node-ip>:8080/cgi-bin/apps/rfeye/user
+```
 
-- **r10** is the last fully proven stability milestone. It passed 5-minute node testing on KJ6DZB-WSB-ACdish5 with stable frame capture, bounded `/tmp/rfeye` growth, populated waterfall data, and final `spectral_scan_ctl=disable`.
-- **r11** added GUI and display improvements: page scrolling, compact Controls / Radio / Diagnostics cards, improved waveform/waterfall/ambient rendering, display scale controls, and improved bundle metadata. Live acceptance was intermittent.
-- **r12** fixed a release-blocking packaging issue: the package build had been compiling a stale parser source from `package/aredn-rfeye/src/rfeye_spectral_parse.c` instead of the canonical parser in `src/rfeye_spectral_parse.c`.
+### Requirements
 
-Current open work:
+- AREDN node with ath10k radio (e.g., QCA9880, QCA9882)
+- OpenWrt kernel built with `ATH_DEBUG` and `ATH_SPECTRAL` (standard on AREDN)
+- `iw` and `uhttpd` packages (standard on AREDN)
 
-- Finish intermittent capture/feed stall triage.
-- Update the working brief and related docs with the r12 state.
-- Decide whether a minimal watchdog/re-prime fix is warranted.
-- Avoid new RF features until the stall behavior is understood.
+### What it shows
+
+- **Waveform** — live spectrum trace of the current channel FFT
+- **Waterfall** — rolling time-vs-frequency heat map
+- **Ambient** — slower minute-peak noise history
+- All displays are approximate/relative dBm, not lab-calibrated
+
+### What it does NOT do
+
+- No wideband sweep across the 5 GHz band — captures current channel only
+- No channel hopping or channel changes
+- No classifier or signal identification
+- No continuous writes to flash — all data stays in `/tmp/rfeye`
+
+## Milestone history
+
+- **r13** — fixed intermittent stall, 3× frame rate improvement (head -c capture, single-awk products, fast append, spectral re-prime)
+- **r12** — fixed stale parser packaging (source sync issue)
+- **r11** — GUI polish (scrolling, compact cards, display scaling, legends)
+- **r10** — stability milestone (5-minute soak PASS)
+
+### Performance (r13 on KJ6DZB-WSB-ACdish5)
+
+| Metric | Value |
+|---|---|
+| Frame rate (sustained) | ~1.0 fps |
+| 300s soak test | 336 frames, zero stalls |
+| Storage (5 min run) | ~2.2 MB in /tmp/rfeye |
+| Memory impact | <5 MB additional |
 
 ## Safety model
 
-RFeye is designed to be conservative on a mesh node:
-
-- No automatic channel hopping
-- No channel changes
-- Current-channel/background spectral scan only
-- Capture data stays under `/tmp/rfeye`
-- No continuous flash writes
+- No channel hopping or channel changes
+- Current-channel background spectral scan only
+- All capture data in `/tmp/rfeye` (tmpfs, no flash writes)
 - Runtime and byte counts are capped
-- Unsupported hardware returns JSON diagnostics instead of failing silently
-- Final state after stop/reset must be `spectral_scan_ctl=disable`
+- Final state after stop/reset: `spectral_scan_ctl=disable`
+- Unsupported hardware returns JSON errors, never fails silently
 
 ## Parser source sync requirement
 
@@ -106,26 +121,22 @@ RFeye treats `iw dev <iface> info` as authoritative for the node operating chann
 
 FFT frame frequency metadata is kept for debugging only. Implausible FFT metadata, such as `768 MHz`, is marked invalid and must not be displayed as the real node frequency.
 
-## Current development focus
+## Development focus
 
-Do not add classifier work or channel-hopping features yet. The immediate focus is reliability:
+No classifier or channel-hopping features yet. Current focus:
 
-1. Finish the intermittent capture/feed stall report.
-2. Identify whether stalls are spectral-source, parser, capture-loop, product-writer, or GUI/API related.
-3. Add only a minimal watchdog/re-prime fix if evidence supports it.
-4. Keep capture data under `/tmp/rfeye` and ensure final `spectral_scan_ctl=disable`.
+1. UI polish and documentation
+2. Storage monitoring for longer runs (>5 minutes)
+3. Production hardening (logging, error paths)
+4. Keep capture data under `/tmp/rfeye` and ensure final `spectral_scan_ctl=disable`
 
 ## Documentation
 
-Key docs:
-
-- `OPENCLAW_WORKING_BRIEF.md`
-- `docs/BUILD_AND_NODE_TEST.md`
-- `docs/LONG_RUN_TESTING.md`
-- `docs/UI_NOTES.md`
-- `docs/NODE_TEST_REPORT_TEMPLATE.md`
-- `docs/TEST_RESULTS_KJ6DZB_WSB_ACDISH5_R10.md`
-- `docs/TEST_RESULTS_KJ6DZB_WSB_ACDISH5_R11.md`
+- [`OPENCLAW_WORKING_BRIEF.md`](OPENCLAW_WORKING_BRIEF.md) — current working brief and task context
+- [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) — system architecture
+- [`docs/TRIAGE_INTERMITTENT_STALL_KJ6DZB_WSB_ACDISH5.md`](docs/TRIAGE_INTERMITTENT_STALL_KJ6DZB_WSB_ACDISH5.md) — r13 stall root-cause analysis
+- [`docs/BUILD_AND_NODE_TEST.md`](docs/BUILD_AND_NODE_TEST.md) — build and test instructions
+- [`artifacts/ipk/BUILD_NOTES.md`](artifacts/ipk/BUILD_NOTES.md) — IPK build history
 
 ## License
 

@@ -229,3 +229,28 @@
   - 300s soak: 336 frames, 1.09 fps sustained, zero hangs ✅
   - Storage: 2.2M /tmp/rfeye, 55.3M free on /tmp, 53M mem available ✅
   - final `spectral_scan_ctl=disable` ✅
+
+## r14 build (2026-05-26 UTC)
+
+- Commit: `6143e3f` (`r14: UI cleanup, README overhaul, working brief update`)
+- Package: `aredn-rfeye 0.1.0-r14`
+- IPK filename: `aredn-rfeye_0.1.0-r14_mips_24kc.ipk`
+- SHA256: `76a125f112177d69978e2049b2e60769c4fc42fc23f4a2fba6e3d2063e810f04`
+- Build tree path: `/home/bill/src/build-sdk/openwrt-sdk-ath79-generic`
+- Build commands:
+  - `rsync -av --delete /home/bill/src/AREDN-RFeye/package/aredn-rfeye/ /home/bill/src/build-sdk/openwrt-sdk-ath79-generic/package/aredn-rfeye/`
+  - `LD_LIBRARY_PATH=/home/bill/src/local-gawk/lib make package/aredn-rfeye/clean V=s`
+  - `LD_LIBRARY_PATH=/home/bill/src/local-gawk/lib make package/aredn-rfeye/compile V=s`
+- Validation:
+  - `sh -n` all shell scripts ✅
+  - `sh scripts/check-parser-source-sync.sh` ✅
+  - `cc -Wall -Wextra` parser ✅
+- Node retest:
+  - `opkg install --force-reinstall` ✅
+  - Pipeline test: all 9 stages ✅
+  - 30s capture: 56 frames, 1.70 fps, 0 stalls ✅
+  - Combined Radio & Status panel present ✅
+  - ath10k FFT subtitle present ✅
+  - Hidden phy/bins inputs present ✅
+  - final `spectral_scan_ctl=disable` ✅
+  - Storage: 1.8M /tmp/rfeye ✅

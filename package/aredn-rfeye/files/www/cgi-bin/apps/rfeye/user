@@ -205,59 +205,38 @@ cat <<'HTML'
 <body>
 <div class="rfeye-wrap">
   <h1>AREDN RFeye</h1>
-  <p class="small-note">Current channel only. Display is relative / approximate dB, not lab calibration.</p>
-
-  <div class="rfeye-panel safety">
-    <b>Safety:</b> No channel hopping or channel changes. Capture data remains under <code>/tmp/rfeye</code>.
-  </div>
+  <p class="small-note">Current channel spectral view (ath10k FFT). Approximate dBm, not calibrated.</p>
+  <input type="hidden" id="phy" value="phy0">
+  <input type="hidden" id="bins" value="128">
 
   <div class="rfeye-grid">
     <div class="rfeye-panel">
-      <div class="panel-head"><h2>Controls</h2><span id="stateBadge" class="badge">idle</span></div>
-      <div class="compact-grid">
-        <label>PHY <input id="phy" value="phy0" autocomplete="off"></label>
-        <label>Bins
-          <select id="bins"><option>64</option><option selected>128</option><option>256</option></select>
-        </label>
-        <label>Duration
-          <select id="seconds"><option value="10" selected>10s</option><option value="30">30s</option><option value="60">60s</option><option value="300">5 min</option></select>
-        </label>
-      </div>
+      <div class="panel-head"><h2>Capture</h2><span id="stateBadge" class="badge">idle</span></div>
       <div class="row">
+        <label>Duration
+          <select id="seconds"><option value="10" selected>10 s</option><option value="30">30 s</option><option value="60">1 min</option><option value="300">5 min</option></select>
+        </label>
         <button id="start">Start</button>
         <button id="stop">Stop</button>
         <button id="reset">Reset</button>
       </div>
-      <div class="metrics" style="margin-top:.45rem">
-        <div>Elapsed / remaining: <b id="elapsed">0s / 0s</b></div>
-        <div>Frame rate: <b id="framerate">0.00/s</b></div>
-        <div>Last frame age: <b id="lastage">--</b></div>
-      </div>
     </div>
 
-    <div class="rfeye-panel">
-      <div class="panel-head"><h2>Radio (trusted)</h2><span class="badge" id="radioSource">--</span></div>
+    <div class="rfeye-panel" style="grid-column:1/-1">
+      <div class="panel-head"><h2>Radio &amp; Status</h2><span id="liveStatus" class="badge">waiting</span></div>
       <div class="metrics">
         <div>Channel: <b id="rchan">--</b></div>
         <div>Frequency: <b id="rfreq">--</b></div>
         <div>Width: <b id="rwidth">--</b></div>
-        <div>Mode/IBSS: <b id="rmode">--</b></div>
-        <div>Interface/PHY: <b id="riface">--</b></div>
-      </div>
-    </div>
-
-    <div class="rfeye-panel">
-      <div class="panel-head"><h2>Diagnostics</h2><span id="liveStatus" class="badge">waiting</span></div>
-      <div class="metrics">
+        <div>Mode: <b id="rmode">--</b></div>
+        <div>Frame rate: <b id="framerate">0.00/s</b></div>
         <div>Frames: <b id="frames">0</b></div>
-        <div>No-frame: <b id="noframes">0</b></div>
-        <div>Waterfall rows: <b id="wfrows">0</b></div>
-        <div>Ambient rows: <b id="amrows">0</b></div>
-        <div>Storage used: <b id="storage">0</b></div>
-        <div>Parser mode: <b id="parsermode">resync</b></div>
+        <div>Last frame: <b id="lastage">--</b></div>
+        <div>Elapsed: <b id="elapsed">0s / 0s</b></div>
+        <div>Storage: <b id="storage">0</b></div>
       </div>
       <details>
-        <summary>Raw JSON / details</summary>
+        <summary>Raw JSON</summary>
         <pre id="raw">Waiting for data...</pre>
       </details>
     </div>
@@ -503,7 +482,7 @@ cat <<'HTML'
     });
     ctx.stroke();
 
-    q('waveNote').textContent = `Bins ${bins.length}, center ${freq || '--'} MHz, width ${widthMHz || '--'} MHz`;
+    q('waveNote').textContent = `${bins.length} FFT bins across ${widthMHz || '?'} MHz channel (Ch ${ch}, ${freq || '?'} MHz center)`;
   }
 
   function drawHeatmap(canvas, rows, scale, emptyText) {
@@ -546,23 +525,18 @@ cat <<'HTML'
     q('raw').textContent = JSON.stringify(bundle, null, 2);
 
     q('frames').textContent = String(c.frames_captured || m.frames_captured || 0);
-    q('noframes').textContent = String(c.no_frame_count || m.no_frame_count || 0);
     q('lastage').textContent = (m.last_frame_age_seconds ?? bundle.last_frame_age_seconds ?? -1) >= 0
-      ? `${m.last_frame_age_seconds ?? bundle.last_frame_age_seconds}s` : '--';
-    q('framerate').textContent = `${m.frames_per_second ?? bundle.frame_rate ?? '0.00'}/s (${m.frames_per_minute ?? '0.0'}/min)`;
+      ? `${m.last_frame_age_seconds ?? bundle.last_frame_age_seconds}s ago` : '--';
+    q('framerate').textContent = `${m.frames_per_second ?? bundle.frame_rate ?? '0.00'}/s`;
     q('elapsed').textContent = `${m.run_elapsed_seconds ?? 0}s / ${m.run_remaining_seconds ?? 0}s`;
 
-    q('storage').textContent = `${m.state_dir_bytes ?? 0} bytes`;
-    q('parsermode').textContent = m.parser_mode || 'resync';
-    q('wfrows').textContent = String(wfRows);
-    q('amrows').textContent = String(amRows);
+    const stBytes = m.state_dir_bytes ?? 0;
+    q('storage').textContent = stBytes > 1048576 ? `${(stBytes/1048576).toFixed(1)} MB` : stBytes > 1024 ? `${(stBytes/1024).toFixed(0)} KB` : `${stBytes} B`;
 
     q('rfreq').textContent = r.frequency_mhz ? `${r.frequency_mhz} MHz` : '--';
     q('rchan').textContent = r.channel || '--';
     q('rwidth').textContent = r.width_mhz ? `${r.width_mhz} MHz` : '--';
     q('rmode').textContent = [r.mode || '--', r.ssid_or_ibss || ''].filter(Boolean).join(' / ');
-    q('riface').textContent = `${r.iface || '--'} / ${r.phy || '--'}`;
-    q('radioSource').textContent = r.source || '--';
 
     const hasData = ((bundle.waveform || {}).bins || []).length || wfRows > 0;
     const state = c.state || 'idle';
@@ -578,9 +552,9 @@ cat <<'HTML'
     q('legendMid').textContent = `${Math.round((scale.min + scale.max) / 2)} dBm`;
     q('legendMax').textContent = `${scale.max} dBm`;
 
-    q('wfNote').textContent = `Newest row at bottom • visible rows ${wfRows}`;
+    q('wfNote').textContent = `Newest row at bottom • ${wfRows} rows`;
     const amb = bundle.ambient || {};
-    q('ambientNote').textContent = `Rows ${amRows}${amb.pending ? ' • current row in progress' : ''}`;
+    q('ambientNote').textContent = `${amRows} rows${amb.pending ? ' • current row in progress' : ''}`;
   }
 
   function render(bundle) {
