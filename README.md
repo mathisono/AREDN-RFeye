@@ -67,15 +67,17 @@ See the test reports in `docs/` for details.
 
 ## Quick local test
 
-Run the parser smoke test from the repo root:
+Run the parser source sync check and parser smoke test from the repo root:
 
 ```sh
+sh scripts/check-parser-source-sync.sh
 scripts/test-parser-smoke.sh
 ```
 
 Expected:
 
 ```text
+Parser source sync check passed
 RFeye parser smoke test passed
 ```
 

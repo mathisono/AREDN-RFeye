@@ -4,31 +4,53 @@
 AREDN-RFeye
 
 ## Active milestone
-r11 — GUI usability and display calibration (post-r10 stability pass)
+r11 — GUI usability + live backend regression triage
 
 ## Guardrails
 - No classifier work
 - No channel hopping
 - No channel changes
 - Captures remain under `/tmp/rfeye`
+- End state must be `spectral_scan_ctl=disable`
 
-## Completed in this run
-- Confirmed starting point includes `f07ee34` and repo is up to date.
-- Reworked node GUI page (`.../www/cgi-bin/apps/rfeye/user`) for:
-  - Scrollable desktop/mobile layout
-  - Compact top cards (Controls/Radio/Diagnostics)
-  - Collapsible raw JSON
-  - Improved waveform/waterfall/ambient rendering and no-data states
-  - Display calibration controls (auto/manual/reset)
-  - Safer polling (single in-flight request)
-  - Heatmap legend and scale labels
-- Extended `rfeye-agent heatmap_bundle` metadata with display/window counters and timing fields.
-- Bumped package release to r11.
-- Added `docs/UI_NOTES.md` and updated README milestone focus.
+## Current validated state
+- r11 GUI/source work committed and pushed (`3f34455`).
+- r11 live acceptance report updated and pushed (`cca8762`) with FAIL due to zero parsed frames.
+- Live connectivity path via MSE-88 is now functional.
 
-## Pending in this run
-- Validation commands and parser/hardware tests.
-- SDK build for `aredn-rfeye_0.1.0-r11_mips_24kc.ipk` + SHA256.
-- Update `artifacts/ipk/BUILD_NOTES.md`.
-- Node install/retest through MSE-88 and finalize r11 test report (currently blocked by SSH connectivity/auth from this environment).
-- Commit and push.
+## Focused backend triage findings (no production code changes)
+
+Live node: `10.188.138.222` via `MSE-88`.
+
+### Acquisition layer
+- Raw capture works: `raw_capture_test` produced `bytes_read=262144` and `/tmp/rfeye/raw-test.tlv` present.
+- During timed start, `/tmp/rfeye/latest.tlv` observed at 32768 bytes.
+- So capture activation and ingest are not completely dead.
+
+### Parser layer
+- `raw_capture_test` result: `ok:false`, `frames_emitted:0`, `error:no parsed frames`.
+- `pipeline_test 128 phy0`: parser stage fails (`parse_resync:false`).
+- Node parser usage output lacks `--resync` and `--probe` options.
+- Node parser SHA256: `ec5ae34d464d7fd40d2c76d357b7d2cc10452ff7e487f3f664c57b45f9981881`.
+
+### r10 vs r11 package parser diff
+- Extracted `r10` IPK parser binary strings include `--probe` and `--resync`.
+- Extracted `r11` IPK parser binary strings do **not** include these options.
+- Repo sources diverged:
+  - `src/rfeye_spectral_parse.c` = newer parser (supports `--probe/--resync`)
+  - `package/aredn-rfeye/src/rfeye_spectral_parse.c` = older parser (no `--probe/--resync`)
+- Build path compiles parser from `package/aredn-rfeye/src/...`, causing r11 package to ship incompatible parser for current `rfeye-agent` invocation.
+
+## Regression layer and candidate root cause
+- **Identified regression layer:** Parser packaging/build-input mismatch (not radio channel config; not final cleanup path).
+- **Primary root-cause candidate:** stale parser source under `package/aredn-rfeye/src/` compiled into r11 IPK while agent expects `--resync/--probe` capable parser.
+
+## Safety confirmation
+- Final live state confirmed: `spectral_scan_ctl=disable`.
+- Artifacts remained under `/tmp/rfeye`.
+- No channel hopping/channel changes performed.
+
+## Next minimal code-change target (not yet applied)
+1. Synchronize parser source used by package build (ensure compiled source includes `--resync/--probe`).
+2. Rebuild IPK and verify parser `--help` on node includes `--resync/--probe`.
+3. Re-run backend + GUI live acceptance.

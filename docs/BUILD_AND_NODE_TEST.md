@@ -19,17 +19,21 @@ Use a bench node first.
 From the repository root:
 
 ```sh
+sh scripts/check-parser-source-sync.sh
 sh -n package/aredn-rfeye/files/usr/sbin/rfeye-agent
 sh -n package/aredn-rfeye/files/usr/sbin/rfeye-survey
 sh -n package/aredn-rfeye/files/www/cgi-bin/apps/rfeye/data/agent.sh
 sh -n package/aredn-rfeye/files/www/cgi-bin/apps/rfeye/user
 cc -Wall -Wextra -o /tmp/rfeye-spectral-parse src/rfeye_spectral_parse.c
+/tmp/rfeye-spectral-parse --help | grep -E -- '--probe|--resync'
 scripts/test-parser-smoke.sh
+scripts/test-hardware-fixture-probe.sh
 ```
 
 Expected:
 
 ```text
+Parser source sync check passed
 RFeye parser smoke test passed
 ```
 

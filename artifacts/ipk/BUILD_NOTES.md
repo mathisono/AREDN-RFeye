@@ -1,29 +1,34 @@
 # RFeye IPK Build Notes
 
-## r11 build (2026-05-25 UTC)
+## r12 build (2026-05-25 UTC)
 
-- Commit: pending local commit (`rfeye: improve node GUI layout and heatmap scaling`)
-- Package: `aredn-rfeye 0.1.0-r11`
-- IPK filename: `aredn-rfeye_0.1.0-r11_mips_24kc.ipk`
-- SHA256: `38c8fff8b508dedb731665d23b57d340dbae5a0550b070cd1854acd725cf5aac`
+- Commit: pending local commit (`rfeye: sync packaged parser source with resync support`)
+- Package: `aredn-rfeye 0.1.0-r12`
+- IPK filename: `aredn-rfeye_0.1.0-r12_mips_24kc.ipk`
+- SHA256: `947c7231310150f8c71c8d4e1d1a04880dd851ba545894b42aa3798c784321a3`
 - Build tree path: `/home/bill/src/build-sdk/openwrt-sdk-ath79-generic`
 - Build commands:
   - `rsync -av --delete /home/bill/src/AREDN-RFeye/package/aredn-rfeye/ /home/bill/src/build-sdk/openwrt-sdk-ath79-generic/package/aredn-rfeye/`
   - `LD_LIBRARY_PATH=/home/bill/src/local-gawk/lib make package/aredn-rfeye/clean V=s`
   - `LD_LIBRARY_PATH=/home/bill/src/local-gawk/lib make package/aredn-rfeye/compile V=s`
 - Validation results before build:
+  - `sh scripts/check-parser-source-sync.sh` ✅
   - `sh -n package/aredn-rfeye/files/usr/sbin/rfeye-agent` ✅
   - `sh -n package/aredn-rfeye/files/usr/sbin/rfeye-survey` ✅
   - `sh -n package/aredn-rfeye/files/www/cgi-bin/apps/rfeye/data/agent.sh` ✅
   - `sh -n package/aredn-rfeye/files/www/cgi-bin/apps/rfeye/user` ✅
   - `cc -Wall -Wextra -o /tmp/rfeye-spectral-parse src/rfeye_spectral_parse.c` ✅
+  - `/tmp/rfeye-spectral-parse --help | grep -E -- '--probe|--resync'` ✅
   - `sh scripts/test-parser-smoke.sh` ✅
   - `sh scripts/test-hardware-fixture-probe.sh` ✅
 - Build notes:
-  - r11 implements scroll-safe compact GUI cards, improved waveform/waterfall/ambient rendering, display scaling controls, and additional `heatmap_bundle` metadata for UI labeling/scaling.
-- Node retest: pending (not yet executed in this run).
+  - r12 fixes the stale package-local parser source by syncing it with the root parser source; the installed parser help now includes `--probe` and `--resync`.
+- Node retest:
+  - `opkg install --force-reinstall /tmp/aredn-rfeye_0.1.0-r12_mips_24kc.ipk` ✅
+  - installed parser help shows `--probe` and `--resync` ✅
+  - live acceptance passed with parsed frames, heatmap bundle data, and final `spectral_scan_ctl=disable` ✅
 
-## r10 build (2026-05-25 UTC)
+## r11 build (2026-05-25 UTC)
 
 - Commit: `f07ee34` (`rfeye: add long-run stability instrumentation`)
 - Package: `aredn-rfeye 0.1.0-r10`
