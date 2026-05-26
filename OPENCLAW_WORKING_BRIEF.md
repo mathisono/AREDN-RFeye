@@ -4,15 +4,25 @@
 
 AREDN-RFeye
 
-## Current status
+RFeye is a node-side AREDN/OpenWrt RF spectrum visibility prototype for ath10k-based 802.11ac radios. The project goal is an AirView-like node test view, with heavier analysis and reporting deferred to a future Linux Workbench.
 
-RFeye is a node-side AREDN/OpenWrt RF spectrum visibility prototype for ath10k-based 802.11ac radios.
+## Start here
 
-The project has moved from initial scaffold to a working short-run node prototype. The current priority is reliability and intermittent capture/feed stall triage, not new RF features.
+Do **not** add new RF features yet.
+
+The next OpenClaw session should focus on the intermittent capture/feed stall. r12 already fixed the stale packaged-parser issue, so do not spend time re-litigating the r11 parser mismatch unless the node parser again lacks `--probe` / `--resync`.
+
+Immediate next action:
+
+1. Confirm parser source sync.
+2. Confirm installed parser supports `--probe` and `--resync`.
+3. Reproduce or catch the intermittent stall.
+4. Save a triage report.
+5. Only then decide whether to add a minimal watchdog/re-prime fix.
 
 ## Active milestone
 
-r12 — parser packaging sync fix and intermittent stall triage
+r12 complete; intermittent capture/feed stall triage in progress.
 
 ## Guardrails
 
@@ -26,9 +36,7 @@ r12 — parser packaging sync fix and intermittent stall triage
 
 ## Known-good state
 
-### r10
-
-r10 is the last fully proven stability milestone.
+### r10 — last fully proven stability milestone
 
 Results on KJ6DZB-WSB-ACdish5:
 
@@ -43,9 +51,9 @@ Results on KJ6DZB-WSB-ACdish5:
 - final `spectral_scan_ctl=disable`
 - no channel hopping or channel changes
 
-### r11
+### r11 — GUI/display work
 
-r11 added GUI and display improvements:
+r11 added:
 
 - page scrolling
 - compact Controls / Radio / Diagnostics cards
@@ -57,23 +65,23 @@ r11 added GUI and display improvements:
 
 r11 source/build validation passed, but live acceptance was intermittent.
 
-## r12 parser packaging fix
+### r12 — parser packaging sync fix
 
-A release-blocking issue was found after r11.
+r12 fixed a release-blocking packaging issue.
 
-The package build had been compiling the stale parser source here:
+The package build had been compiling stale parser source from:
 
 ```text
 package/aredn-rfeye/src/rfeye_spectral_parse.c
 ```
 
-instead of the newer canonical parser here:
+instead of the newer canonical parser source:
 
 ```text
 src/rfeye_spectral_parse.c
 ```
 
-The stale packaged parser did not support:
+The stale packaged parser lacked:
 
 ```text
 --probe
@@ -82,7 +90,7 @@ The stale packaged parser did not support:
 
 while `rfeye-agent` expected the resync-capable parser path.
 
-r12 fixed this by syncing the package parser source from the canonical parser source and adding a source-sync validation check.
+r12 synced the package parser source from the canonical parser source and added a source-sync validation check.
 
 Before building any IPK, run:
 
@@ -90,7 +98,11 @@ Before building any IPK, run:
 sh scripts/check-parser-source-sync.sh
 ```
 
-The installed parser on the node must show `--probe` and `--resync` in help output.
+On the node, verify:
+
+```sh
+/usr/lib/rfeye/rfeye-spectral-parse --help | grep -E -- '--probe|--resync'
+```
 
 ## Last known runtime observation
 
@@ -120,20 +132,6 @@ Potential layers to distinguish:
 6. GUI/API polling issue
 7. spectral scan state issue
 
-## Immediate next work
-
-1. Finish the intermittent stall triage report.
-2. Capture current state when the stall occurs:
-   - `capture_status`
-   - `pipeline_status`
-   - `storage_status`
-   - `acquisition_debug`
-   - `parser_probe`
-   - `raw_capture_test`
-3. Determine whether the stall is spectral-source, parser, loop, product-writer, or GUI/API related.
-4. Decide whether a minimal watchdog/re-prime fix is warranted.
-5. Avoid feature work until this is understood.
-
 ## Node under test
 
 ```text
@@ -150,17 +148,12 @@ Frequency: 5705 MHz
 Width: 20 MHz
 ```
 
-## Useful commands
+## Local validation commands
 
-Parser sync:
+Run from the repo root:
 
 ```sh
 sh scripts/check-parser-source-sync.sh
-```
-
-Local validation:
-
-```sh
 sh -n package/aredn-rfeye/files/usr/sbin/rfeye-agent
 sh -n package/aredn-rfeye/files/usr/sbin/rfeye-survey
 sh -n package/aredn-rfeye/files/www/cgi-bin/apps/rfeye/data/agent.sh
@@ -170,17 +163,33 @@ sh scripts/test-parser-smoke.sh
 sh scripts/test-hardware-fixture-probe.sh
 ```
 
-Node triage:
+## Node triage commands
+
+When a stall is observed, capture state immediately:
 
 ```sh
+date
+uptime
+cat /sys/kernel/debug/ieee80211/phy0/ath10k/spectral_scan_ctl 2>/dev/null || true
+ps w | grep -E 'rfeye|spectral|dd|parse' | grep -v grep || true
+ls -lah /tmp/rfeye
+du -ah /tmp/rfeye | sort -h | tail -30
+
 /usr/sbin/rfeye-agent capture_status
 /usr/sbin/rfeye-agent pipeline_status
 /usr/sbin/rfeye-agent storage_status
 /usr/sbin/rfeye-agent acquisition_debug
 /usr/sbin/rfeye-agent heatmap_bundle
-/usr/sbin/rfeye-agent raw_capture_test 12 128 phy0
 /usr/sbin/rfeye-agent parser_probe
-cat /sys/kernel/debug/ieee80211/phy0/ath10k/spectral_scan_ctl
+```
+
+Then test whether raw capture and parser still work:
+
+```sh
+/usr/sbin/rfeye-agent raw_capture_test 12 128 phy0
+/usr/sbin/rfeye-agent raw_inspect
+/usr/sbin/rfeye-agent parser_probe
+/usr/lib/rfeye/rfeye-spectral-parse --resync --stats --input /tmp/rfeye/raw-test.tlv --phy phy0 --limit 10 --bins 64
 ```
 
 Safe reset:
@@ -190,6 +199,41 @@ Safe reset:
 /usr/sbin/rfeye-agent reset
 cat /sys/kernel/debug/ieee80211/phy0/ath10k/spectral_scan_ctl
 ```
+
+## Interpretation guide
+
+- `raw_capture_test` works after stall: timed capture loop or pipeline state is likely the issue.
+- `raw_capture_test` reads bytes but emits 0 frames: live spectral stream may have stalled or changed format.
+- `raw_capture_test` reads 0 bytes: spectral scan/debugfs/driver acquisition issue.
+- capture PID dead but `capture_status` says running: stale PID/session cleanup bug.
+- capture PID alive but frame count frozen: capture loop hang or parser call stall.
+- waveform/waterfall files update but GUI does not: CGI/GUI polling issue.
+
+## Suggested next report
+
+Create:
+
+```text
+docs/TRIAGE_INTERMITTENT_STALL_KJ6DZB_WSB_ACDISH5.md
+```
+
+Include:
+
+- last known good frame count and frame rate
+- exact time stall was observed
+- `capture_status`
+- `pipeline_status`
+- `storage_status`
+- `acquisition_debug`
+- `parser_probe`
+- parser help/version check
+- raw capture result after stall
+- whether capture PID was alive
+- whether stale PID/end files existed
+- whether reset recovered capture
+- final `spectral_scan_ctl` state
+- suspected layer
+- recommended smallest fix
 
 ## Definition of done for next patch
 
