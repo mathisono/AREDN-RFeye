@@ -70,7 +70,8 @@ Implications for RFeye:
 - **AirView research mode is separate and bench-only.** Any retune-and-stitch
   experimentation is restricted to lab hardware not serving live mesh traffic.
 - **WMI knobs remain useful** for improving per-channel FFT quality.
-- **PBE-5AC-500 needs hardware verification** — check whether it exposes a second
-  radio before assuming AirView-like scanning is possible.
+- **PBE-5AC-500 confirmed single-radio** (2026-05-26) — QCA9558 SoC + QCA988x on
+  PCIe, one phy, no second scanner radio exposed. AirView-like wideband is not
+  feasible without AP disruption.
 
 See: `docs/AIRVIEW_ARCHITECTURE_FINDINGS.md` and `docs/WIDEBAND_SPECTRAL_WORKING_BRIEF.md`

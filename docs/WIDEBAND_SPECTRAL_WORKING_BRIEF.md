@@ -100,12 +100,35 @@ See `AIRVIEW_ARCHITECTURE_FINDINGS.md` → "Dual-Radio Fingerprint" section.
 | Second PCI or AHB radio in dmesg | `wifi1: Atheros ???: mem=0xb8100000` | Not expected |
 | `iw dev` phy count | Two phys (or vendor-hidden) | One phy |
 
-### Expected outcome
+### Result: Confirmed Single-Radio (2026-05-26)
 
-The PBE-5AC-500 is likely a **single-radio device** (QCA9882/QCA988x on PCIe).
-If confirmed, wideband AirView-like scanning is not feasible without disrupting
-the AP link. RFeye on this hardware should remain current-channel only in
-production mode.
+Checked via SSH through MSE-88 to `KJ6DZB-WSB-ACdish5` (AREDN firmware).
+
+| Check | R5AC-Lite (dual) | PBE-5AC-500 (result) |
+|-------|-------------------|---------------------|
+| SoC | QCA9560 | QCA9558 ver 1 rev 0 |
+| `/sys/class/net/wifi1` | Present (AHB) | **Absent** |
+| `/sys/class/ieee80211/` | (vendor, hidden) | `phy0` only |
+| `iw dev` phy count | N/A (vendor driver) | **1 phy** (`phy0` → `wlan0`) |
+| PCI devices | `077711ac` (ath_pci) | `077711ac` (ath10k_pci) — **one device** |
+| `ath-spectral-filter` interrupt | ~1300/sec | **None** |
+| `airview1` interface | Present | **Absent** |
+| `radio.2.bus=ahb` | Present | **No board.info** |
+| ath10k spectral debugfs | N/A (vendor) | ✅ `spectral_scan_ctl`, `spectral_scan0`, `spectral_bins`, `spectral_count` |
+| ath9k module | Not loaded | Loaded but unused (no ath9k net interface) |
+
+**Conclusion:** The PBE-5AC-500 is a **single-radio device** with one QCA988x
+on PCIe (`phy0`/`wlan0`). There is no second scanner radio. The QCA9558 SoC does
+contain an on-chip radio (hence `ath9k` module loaded), but it is **not exposed
+as a network interface** and is not used for spectral scanning under AREDN.
+
+AirView-like wideband scanning is **not feasible** on this hardware without
+taking the production radio off-channel. RFeye on PBE-5AC-500 should remain
+**current-channel only** in production mode.
+
+The upstream ath10k spectral debugfs path (`spectral_scan_ctl`, `spectral_scan0`,
+`spectral_bins=128`, `spectral_count`) is present and functional for
+per-channel FFT capture — this is RFeye's correct data source.
 
 ---
 
