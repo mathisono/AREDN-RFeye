@@ -54,3 +54,23 @@ Live node: `10.188.138.222` via `MSE-88`.
 1. Synchronize parser source used by package build (ensure compiled source includes `--resync/--probe`).
 2. Rebuild IPK and verify parser `--help` on node includes `--resync/--probe`.
 3. Re-run backend + GUI live acceptance.
+
+## AirView Architecture Finding (2026-05-26)
+
+Behavioral observation of a Rocket 5AC Lite confirmed that Ubiquiti AirView uses
+a **dedicated second on-chip radio** (wifi1/AHB) for spectral scanning while the
+main PCI radio (wifi0) continues serving the AP. The scanner sweeps ~5100–5900 MHz
+and stitches per-channel FFT slices into a wideband display.
+
+Implications for RFeye:
+
+- **RFeye production mode remains current-channel only.** Single-radio AREDN
+  devices (PBE-5AC-500, etc.) cannot replicate AirView wideband without dropping
+  the AP link.
+- **AirView research mode is separate and bench-only.** Any retune-and-stitch
+  experimentation is restricted to lab hardware not serving live mesh traffic.
+- **WMI knobs remain useful** for improving per-channel FFT quality.
+- **PBE-5AC-500 needs hardware verification** — check whether it exposes a second
+  radio before assuming AirView-like scanning is possible.
+
+See: `docs/AIRVIEW_ARCHITECTURE_FINDINGS.md` and `docs/WIDEBAND_SPECTRAL_WORKING_BRIEF.md`
