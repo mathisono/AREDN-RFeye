@@ -1,54 +1,70 @@
 # OpenClaw Working Brief
 
 ## Project
+
 AREDN-RFeye
 
+RFeye is a node-side AREDN/OpenWrt RF spectrum visibility prototype for ath10k-based 802.11ac radios. The project goal is an AirView-like node test view, with heavier analysis and reporting deferred to a future Linux Workbench.
+
+## Start here
+
+Do **not** add new RF features yet.
+
+The next OpenClaw session should focus on the intermittent capture/feed stall. r12 already fixed the stale packaged-parser issue, so do not spend time re-litigating the r11 parser mismatch unless the node parser again lacks `--probe` / `--resync`.
+
+Immediate next action:
+
+1. Confirm parser source sync.
+2. Confirm installed parser supports `--probe` and `--resync`.
+3. Verify the spectrum flow path end-to-end.
+4. Reproduce or catch the intermittent stall.
+5. Save a triage report.
+6. Only then decide whether to add a minimal watchdog/re-prime fix.
+
 ## Active milestone
-r11 — GUI usability + live backend regression triage
+
+r12 complete; intermittent capture/feed stall triage in progress.
 
 ## Guardrails
-- No classifier work
+
+- No classifier work yet
 - No channel hopping
 - No channel changes
 - Captures remain under `/tmp/rfeye`
-- End state must be `spectral_scan_ctl=disable`
+- No continuous capture writes to flash
+- End state after stop/reset must be `spectral_scan_ctl=disable`
+- Do not add new features until the intermittent feed stall is understood
 
-## Current validated state
-- r11 GUI/source work committed and pushed (`3f34455`).
-- r11 live acceptance report updated and pushed (`cca8762`) with FAIL due to zero parsed frames.
-- Live connectivity path via MSE-88 is now functional.
+## Known-good state
 
-## Focused backend triage findings (no production code changes)
+### r10 — last fully proven stability milestone
 
-Live node: `10.188.138.222` via `MSE-88`.
+Results on KJ6DZB-WSB-ACdish5:
 
-### Acquisition layer
-- Raw capture works: `raw_capture_test` produced `bytes_read=262144` and `/tmp/rfeye/raw-test.tlv` present.
-- During timed start, `/tmp/rfeye/latest.tlv` observed at 32768 bytes.
-- So capture activation and ingest are not completely dead.
+- 5-minute manual run: PASS
+- `frames_captured=80`
+- `no_frame_count=0`
+- `waterfall_rows=80`
+- `/tmp/rfeye` about 772 KiB
+- `soak_test 300 128 phy0`: PASS
+- `soak_test frames_captured=100`
+- `state_dir_bytes=823296`
+- final `spectral_scan_ctl=disable`
+- no channel hopping or channel changes
 
-### Parser layer
-- `raw_capture_test` result: `ok:false`, `frames_emitted:0`, `error:no parsed frames`.
-- `pipeline_test 128 phy0`: parser stage fails (`parse_resync:false`).
-- Node parser usage output lacks `--resync` and `--probe` options.
-- Node parser SHA256: `ec5ae34d464d7fd40d2c76d357b7d2cc10452ff7e487f3f664c57b45f9981881`.
+### r11 — GUI/display work
 
-### r10 vs r11 package parser diff
-- Extracted `r10` IPK parser binary strings include `--probe` and `--resync`.
-- Extracted `r11` IPK parser binary strings do **not** include these options.
-- Repo sources diverged:
-  - `src/rfeye_spectral_parse.c` = newer parser (supports `--probe/--resync`)
-  - `package/aredn-rfeye/src/rfeye_spectral_parse.c` = older parser (no `--probe/--resync`)
-- Build path compiles parser from `package/aredn-rfeye/src/...`, causing r11 package to ship incompatible parser for current `rfeye-agent` invocation.
+r11 added:
 
-## Regression layer and candidate root cause
-- **Identified regression layer:** Parser packaging/build-input mismatch (not radio channel config; not final cleanup path).
-- **Primary root-cause candidate:** stale parser source under `package/aredn-rfeye/src/` compiled into r11 IPK while agent expects `--resync/--probe` capable parser.
+- page scrolling
+- compact Controls / Radio / Diagnostics cards
+- collapsible raw JSON
+- waveform labels and trusted radio frequency context
+- waterfall and ambient legends / no-data states
+- auto/manual display scaling controls
+- improved bundle metadata
 
-## Safety confirmation
-- Final live state confirmed: `spectral_scan_ctl=disable`.
-- Artifacts remained under `/tmp/rfeye`.
-- No channel hopping/channel changes performed.
+r11 source/build validation passed, but live acceptance was intermittent.
 
 ## Next minimal code-change target (not yet applied)
 1. Synchronize parser source used by package build (ensure compiled source includes `--resync/--probe`).
