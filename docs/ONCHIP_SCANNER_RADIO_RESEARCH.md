@@ -114,10 +114,9 @@ for ath9k. Testing will clarify the correct offset.
 This is a well-understood pattern — many QCA955x OpenWrt targets enable
 the WMAC this way (Archer C7 v1, LibreRouter v1, Sophos AP100, etc.).
 
-**Risk:** The on-chip radio's RF path on the PBE-5AC-500 PCB is unknown.
-It may have no antenna connection, a shared/switched antenna, or an internal
-test point only. Enabling the radio with no antenna path would be harmless for
-spectral *receive*, but TX must be disabled or zero-power.
+**RF path:** Confirmed usable — the on-chip radio has a working antenna
+connection on the PBE-5AC-500 PCB. TX should still be disabled or zero-power
+since this radio is used for receive-only spectral scanning.
 
 ### Phase 2: ath9k Spectral Scan on the WMAC
 
@@ -196,9 +195,7 @@ Potential upstream contributions:
 4. **Verify ath9k probe** — does `phy1` appear? Does spectral debugfs
    (`/sys/kernel/debug/ieee80211/phy1/ath9k/spectral_scan_ctl`) appear?
 
-5. **RF path investigation** — does the on-chip radio receive anything useful
-   without an external antenna? Even with poor sensitivity, spectral scanning
-   of strong signals may work for interference detection.
+5. ~~RF path investigation.~~ **Confirmed usable** — antenna path is good.
 
 6. **Determine correct ART caldata offset** for the WMAC on this board.
    Observed: 0x5000 contains valid ath9k caldata (header `44 08`). But the
