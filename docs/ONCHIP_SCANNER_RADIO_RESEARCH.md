@@ -99,20 +99,70 @@ cal_art_1000: calibration@1000 {
 };
 ```
 
-**Note on caldata offset:** The ART partition layout needs verification.
-On the PBE-5AC-500 we observed:
-- `0x0000`: Board MAC data (6 bytes, used by eth0)
-- `0x1000`: All 0xFF (possibly unused, or ath10k OTP)
-- `0x5000`: ath9k WMAC caldata (header `44 08`, board `CUS223-720-S0849`)
+### Caldata Layout (Verified)
 
-The `ubnt_xc` include currently assigns `cal_art_5000` (0x5000, 0x844) to
-the ath10k PCI radio, which seems wrong for ath10k caldata. This may work
-because the ath10k-ct firmware extracts what it needs from the OTP region
-elsewhere. The WMAC caldata at 0x5000 may need to be referenced separately
-for ath9k. Testing will clarify the correct offset.
+The ART partition (mtd7) on the PBE-5AC-500:
 
-This is a well-understood pattern — many QCA955x OpenWrt targets enable
-the WMAC this way (Archer C7 v1, LibreRouter v1, Sophos AP100, etc.).
+| Offset | Size | Content | Used by |
+|--------|------|---------|---------|
+| 0x0000 | 6 | Ethernet MAC (`f4:92:bf:bd:8a:de`) | eth0 via `macaddr_art_0` |
+| 0x1000 | — | All `0xFF` (unused) | Nothing |
+| 0x5000 | 0x844 | AR9300 compressed EEPROM, MAC `f4:92:bf:bc:8a:de`, board `CUS223-720-S0849` | ath10k PCI via `cal_art_5000` |
+
+Key finding: the `cal_art_5000` data (header `44 08`) is **AR9300 EEPROM format**,
+not native ath10k caldata. ath10k-ct reads it via nvmem override (dmesg: `cal nvmem`).
+The generic `board.bin` (2116 bytes, MAC `12:34:56`) is a template; the device-specific
+calibration comes from ART 0x5000. The two files have different MD5 hashes.
+
+For the WMAC, both approaches should work:
+
+**Option A: Share the existing `cal_art_5000` nvmem cell**
+```dts
+&wmac {
+    status = "okay";
+    nvmem-cells = <&cal_art_5000>;
+    nvmem-cell-names = "calibration";
+};
+```
+The AR9300 EEPROM data at 0x5000 is the native format for ath9k. The WMAC MAC
+(`f4:92:bf:bc:8a:de`) is embedded in the caldata. Both ath10k and ath9k can
+reference the same nvmem cell since they read different fields.
+
+**Option B: Use `qca,no-eeprom` (direct MMIO read)**
+```dts
+&wmac {
+    status = "okay";
+    qca,no-eeprom;
+};
+```
+On QCA955x, the WMAC EEPROM data is memory-mapped at the radio's MMIO base
+(0x18100000). ath9k can read it directly from hardware registers. This is the
+approach used by Meraki MR18.
+
+**Recommended: Option A** — explicit caldata reference is more reliable and
+consistent with the majority of upstream QCA9558 WMAC enablements.
+
+### Reference Devices
+
+11+ QCA955x devices in upstream OpenWrt enable `&wmac` with ath9k:
+
+| Device | SoC | WMAC caldata | Pattern |
+|--------|-----|-------------|--------|
+| TP-Link Archer C7 v1 | QCA9558 | `calibration@1000` (0x440) | nvmem-cells |
+| Aruba AP-115 | QCA9558 | `calibration@1000` (0x440) | nvmem-cells |
+| Allnet ALL-WAP02860AC | QCA9558 | `calibration@1000` (0x440) | nvmem-cells |
+| Huawei AP5030DN | QCA9550 | `calibration@1000` (0x440) | nvmem-cells |
+| LibreRouter v1 | QCA9558 | `calibration@1000` (0x440) | nvmem-cells |
+| OpenMesh MR series | QCA9558 | `calibration@1000` (0x440) | nvmem-cells |
+| Sophos AP15 | QCA9557 | `status = "okay"` | nvmem-cells |
+| Ruckus R500 | QCA9557 | `status = "okay"` | nvmem-cells |
+| Meraki MR18 | QCA9557 | `qca,no-eeprom` | direct MMIO |
+| AVM Fritz Repeater | QCA9556 | `qca,no-eeprom` | direct MMIO |
+| Zyxel NBG6616 | QCA9557 | (via led node) | nvmem-cells |
+
+Note: Most non-Ubiquiti boards store WMAC caldata at ART+0x1000. The Ubiquiti
+`ubnt_xc` family stores it at ART+0x5000. The DTS must use the correct offset
+for the board.
 
 **RF path:** Confirmed usable — the on-chip radio has a working antenna
 connection on the PBE-5AC-500 PCB. TX should still be disabled or zero-power
@@ -197,9 +247,9 @@ Potential upstream contributions:
 
 5. ~~RF path investigation.~~ **Confirmed usable** — antenna path is good.
 
-6. **Determine correct ART caldata offset** for the WMAC on this board.
-   Observed: 0x5000 contains valid ath9k caldata (header `44 08`). But the
-   existing DTS assigns 0x5000 to ath10k. Test both 0x1000 and 0x5000.
+6. ~~Determine correct ART caldata offset.~~ **Resolved.** ART 0x5000 contains
+   valid AR9300 EEPROM caldata (header `44 08`, WMAC MAC embedded). The existing
+   `cal_art_5000` nvmem cell can be shared with `&wmac`. ART 0x1000 is all `0xFF`.
 
 7. **If ath9k spectral works on the WMAC:** build a channel-sweep scanner
    using the upstream `spectral_scan0` debugfs interface.
