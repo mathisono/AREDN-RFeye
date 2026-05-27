@@ -188,6 +188,64 @@ that produces the illusion of wideband coverage by rapidly cycling through chann
 
 ---
 
+## Dual-Radio Fingerprint (Reference for Comparison)
+
+The following signatures identify the R5AC-Lite as a dual-radio device.
+Use these as a baseline when checking other hardware (e.g. PBE-5AC-500).
+
+### board.info
+```
+board.phycount=1          # misleading — counts only the "primary" radio
+radio.1.bus=pci            # wifi0 — main AP radio
+radio.2.bus=ahb            # wifi1 — on-chip scanner radio
+```
+
+### /sys/class/net
+```
+wifi0 -> ../../devices/pci0000:00/0000:00:00.0/net/wifi0   # PCI radio
+wifi1 -> ../../devices/virtual/net/wifi1                    # AHB/on-chip radio
+ath0  -> ../../devices/virtual/net/ath0                     # AP VAP on wifi0
+airview1 -> ../../devices/virtual/net/airview1              # Monitor VAP on wifi1
+```
+
+### PCI bus
+```
+0000  077711ac  ...  ath_pci       # only one PCI device — wifi0
+```
+(wifi1 is AHB-attached, not on PCI.)
+
+### Kernel modules
+```
+ath_spectral  24777  3  umac,ath_dev   # spectral FFT module
+ubnt_poll_host 153289 2                # airMAX polling + chardev control
+ath_pci                                # PCI radio driver (wifi0 only)
+```
+
+### dmesg signatures
+```
+ath_pci_probe                          # PCI radio probe
+wifi1: Atheros ???: mem=0xb8100000, irq=2   # AHB radio at fixed MMIO
+ath_spectral: Version 2.0.0
+IRQ request for SPECTRAL-XMIT-FILTER successful   # on wifi1
+VAP device airview1 created            # monitor VAP on wifi1
+```
+
+### /proc/interrupts
+```
+64:  xxxxxxx  ATH GPIO  ath-spectral-filter   # continuous, ~1300/sec
+75:  xxxxxxx  ATH PCI   wifi0                 # main radio
+```
+
+### What a single-radio device would look like
+- Only `wifi0` in `/sys/class/net`, no `wifi1`
+- No `radio.2` section in `board.info`
+- No `ath-spectral-filter` GPIO interrupt
+- No `airview1` interface
+- Only one PCI device in `/proc/bus/pci/devices`
+- No AHB radio in dmesg (`wifi1: Atheros ...` absent)
+
+---
+
 ## Legal and Ethical Note
 
 All findings in this document are from behavioral observation of a running device

@@ -56,27 +56,49 @@ They do **not** provide cross-channel sweep or wideband instantaneous capture.
 ## PBE-5AC-500 Hardware Check Required
 
 Before assuming AirView-like scanning is possible on the PBE-5AC-500, verify
-whether a second radio exists or is exposed:
+whether a second radio exists or is exposed.
 
-### Recommended commands (stock firmware and AREDN):
+> **Note:** No stock-firmware PBE-5AC-500 is available. The check should be
+> performed on the AREDN-firmware unit. The commands below work on both
+> stock (Ubiquiti vendor driver) and AREDN (ath10k/OpenWrt).
+
+### Recommended commands (AREDN node via SSH):
 
 ```bash
+# Radio / phy enumeration
 iw dev
 iw phy
-ls /sys/class/net
-dmesg | grep -iE 'wifi|ath|qca|spectral|airview|vap'
+ls -la /sys/class/net/
+
+# Kernel log — radio probe, spectral, VAP creation
+dmesg | grep -iE 'wifi|ath[^e]|qca|spectral|airview|vap|radio|pci.*(attach|probe)|ahb'
+
+# Spectral debugfs (ath10k path on AREDN)
 find /sys/kernel/debug -maxdepth 5 -type f | grep -i spectral
+
+# Loaded modules
 cat /proc/modules | grep -iE 'ath|spectral'
+
+# PCI devices
 lspci 2>/dev/null
 cat /proc/bus/pci/devices 2>/dev/null
+
+# Board info (if present — may not exist on AREDN)
+cat /etc/board.info 2>/dev/null | grep -E 'phycount|radio.*bus'
 ```
 
-### What to look for
+### What to look for — compare against R5AC-Lite dual-radio fingerprint
 
-- Does `iw dev` show more than one phy?
-- Does `dmesg` mention `wifi1` or a second radio attachment?
-- Is there a second PCI or AHB radio device beyond the QCA988x?
-- Are `ath_spectral` or similar modules loaded on a non-production interface?
+See `AIRVIEW_ARCHITECTURE_FINDINGS.md` → "Dual-Radio Fingerprint" section.
+
+| Check | Dual-radio (R5AC-Lite) | Single-radio (expected PBE-5AC-500) |
+|-------|----------------------|------------------------------------|
+| `/sys/class/net/wifi1` | Present (AHB) | Absent |
+| `radio.2.bus=ahb` in board.info | Present | Absent |
+| `ath-spectral-filter` in `/proc/interrupts` | Present (~1300/sec) | Absent |
+| `airview1` interface | Present | Absent |
+| Second PCI or AHB radio in dmesg | `wifi1: Atheros ???: mem=0xb8100000` | Not expected |
+| `iw dev` phy count | Two phys (or vendor-hidden) | One phy |
 
 ### Expected outcome
 
