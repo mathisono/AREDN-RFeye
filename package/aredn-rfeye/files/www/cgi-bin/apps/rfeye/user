@@ -205,7 +205,7 @@ cat <<'HTML'
 <body>
 <div class="rfeye-wrap">
   <h1>AREDN RFeye</h1>
-  <p class="small-note">Current channel spectral view (ath10k FFT). Approximate dBm, not calibrated.</p>
+  <p class="small-note">RF spectral view. Approximate dBm, not calibrated.</p>
   <input type="hidden" id="phy" value="phy0">
   <input type="hidden" id="bins" value="128">
 
@@ -213,6 +213,16 @@ cat <<'HTML'
     <div class="rfeye-panel">
       <div class="panel-head"><h2>Capture</h2><span id="stateBadge" class="badge">idle</span></div>
       <div class="row">
+        <label>Band
+          <select id="band">
+            <option value="current" selected>Current Channel</option>
+            <option value="2ghz">2.4 GHz (2400–2484)</option>
+            <option value="5ghz">5 GHz All (5100–5900)</option>
+            <option value="unii1">5 GHz UNII-1 (5150–5250)</option>
+            <option value="dfs">5 GHz DFS (5250–5725)</option>
+            <option value="unii3">5 GHz UNII-3 (5725–5850)</option>
+          </select>
+        </label>
         <label>Duration
           <select id="seconds"><option value="10" selected>10 s</option><option value="30">30 s</option><option value="60">1 min</option><option value="300">5 min</option></select>
         </label>
@@ -288,6 +298,15 @@ cat <<'HTML'
   const POLL_MS = 1500;
   const DEFAULT_SCALE = { min: -120, max: -60 };
   const MIN_SPAN = 20;
+  const GRID_MHZ = 5;
+  const BANDS = {
+    current: { label: 'Current Channel', low: 0, high: 0 },
+    '2ghz':  { label: '2.4 GHz', low: 2400, high: 2484 },
+    '5ghz':  { label: '5 GHz All', low: 5100, high: 5900 },
+    unii1:   { label: 'UNII-1', low: 5150, high: 5250 },
+    dfs:     { label: 'DFS', low: 5250, high: 5725 },
+    unii3:   { label: 'UNII-3', low: 5725, high: 5850 }
+  };
   const raw = document.getElementById('raw');
   const waveCanvas = document.getElementById('waveform');
   const waterfallCanvas = document.getElementById('waterfall');
@@ -401,6 +420,44 @@ cat <<'HTML'
     return '#f8fafc';
   }
 
+  function getBandRange(bundle) {
+    const sel = q('band').value || 'current';
+    const band = BANDS[sel];
+    if (!band || sel === 'current') {
+      const r = (bundle && bundle.radio && bundle.radio.ok) ? bundle.radio : {};
+      const freq = Number(r.frequency_mhz || 0);
+      const w = Number(r.width_mhz || 20);
+      if (freq > 0) return { low: freq - w / 2, high: freq + w / 2, label: `Ch ${r.channel || '?'}` };
+      return { low: 0, high: 0, label: 'Current Channel' };
+    }
+    return { low: band.low, high: band.high, label: band.label };
+  }
+
+  function drawFreqGrid(ctx, left, top, plotW, plotH, bandLow, bandHigh) {
+    if (bandLow <= 0 || bandHigh <= bandLow) return;
+    const span = bandHigh - bandLow;
+    ctx.save();
+    ctx.font = '10px system-ui, sans-serif';
+    ctx.textAlign = 'center';
+    const firstGrid = Math.ceil(bandLow / GRID_MHZ) * GRID_MHZ;
+    for (let f = firstGrid; f <= bandHigh; f += GRID_MHZ) {
+      const x = left + ((f - bandLow) / span) * plotW;
+      const isMajor = (f % 20 === 0);
+      const isMinor10 = (f % 10 === 0);
+      ctx.strokeStyle = isMajor ? '#334155' : (isMinor10 ? '#1e293b' : '#141c28');
+      ctx.lineWidth = isMajor ? 1 : 0.5;
+      ctx.beginPath();
+      ctx.moveTo(x, top);
+      ctx.lineTo(x, top + plotH);
+      ctx.stroke();
+      if (isMajor || (span <= 200 && isMinor10)) {
+        ctx.fillStyle = isMajor ? '#8ca0b8' : '#5a6b7f';
+        ctx.fillText(String(f), x, top + plotH + 12);
+      }
+    }
+    ctx.restore();
+  }
+
   function drawNoData(ctx, w, h, text) {
     ctx.fillStyle = '#05080f';
     ctx.fillRect(0, 0, w, h);
@@ -415,6 +472,7 @@ cat <<'HTML'
     const wave = bundle.waveform || {};
     const radio = (bundle.radio && bundle.radio.ok) ? bundle.radio : {};
     const bins = wave.bins || [];
+    const band = getBandRange(bundle);
 
     if (!bins.length) {
       drawNoData(ctx, width, height, 'No waveform data yet');
@@ -429,6 +487,22 @@ cat <<'HTML'
     ctx.fillStyle = '#05080f';
     ctx.fillRect(0, 0, width, height);
 
+    const freq = Number(radio.frequency_mhz || 0);
+    const widthMHz = Number(radio.width_mhz || 20);
+    const ch = radio.channel || '--';
+
+    // Determine frequency axis range
+    let bandLow = band.low;
+    let bandHigh = band.high;
+    if (bandLow <= 0 || bandHigh <= bandLow) {
+      bandLow = freq > 0 ? freq - widthMHz / 2 : Number(wave.x_start_mhz || 0);
+      bandHigh = freq > 0 ? freq + widthMHz / 2 : Number(wave.x_end_mhz || 0);
+    }
+
+    // Draw 5 MHz frequency grid lines
+    drawFreqGrid(ctx, left, top, plotW, plotH, bandLow, bandHigh);
+
+    // Horizontal dBm grid lines
     ctx.strokeStyle = '#1e293b';
     ctx.lineWidth = 1;
     for (let i = 0; i <= 4; i++) {
@@ -438,6 +512,7 @@ cat <<'HTML'
 
     const yFromDbm = (v) => top + (scale.max - v) * plotH / ((scale.max - scale.min) || 1);
 
+    // Y axis labels
     ctx.fillStyle = '#93a3b7';
     ctx.font = '11px system-ui, sans-serif';
     ctx.textAlign = 'right';
@@ -445,47 +520,63 @@ cat <<'HTML'
     ctx.fillText(`${Math.round((scale.max + scale.min) / 2)} dBm`, left - 5, top + plotH / 2 + 4);
     ctx.fillText(`${scale.min} dBm`, left - 5, top + plotH - 2);
 
-    const freq = Number(radio.frequency_mhz || 0);
-    const widthMHz = Number(radio.width_mhz || 0);
-    const ch = radio.channel || '--';
-    const startF = Number.isFinite(freq) && freq > 0 && widthMHz > 0 ? (freq - widthMHz / 2) : Number(wave.x_start_mhz || 0);
-    const endF = Number.isFinite(freq) && freq > 0 && widthMHz > 0 ? (freq + widthMHz / 2) : Number(wave.x_end_mhz || 0);
-
-    if (startF > 0 && endF > startF) {
+    // X axis edge labels
+    if (bandLow > 0 && bandHigh > bandLow) {
       ctx.fillStyle = '#8ca0b8';
+      ctx.font = '11px system-ui, sans-serif';
       ctx.textAlign = 'left';
-      ctx.fillText(`${startF.toFixed(1)} MHz`, left, height - 8);
+      ctx.fillText(`${bandLow} MHz`, left, height - 4);
       ctx.textAlign = 'right';
-      ctx.fillText(`${endF.toFixed(1)} MHz`, left + plotW, height - 8);
-
-      const cx = left + plotW * 0.5;
-      ctx.strokeStyle = '#64748b';
-      ctx.setLineDash([4, 4]);
-      ctx.beginPath(); ctx.moveTo(cx, top); ctx.lineTo(cx, top + plotH); ctx.stroke();
-      ctx.setLineDash([]);
-      ctx.fillStyle = '#8ca0b8';
-      ctx.textAlign = 'center';
-      ctx.fillText(`Ch ${ch} / center ${freq || '--'} MHz`, cx, 11);
-
-      ctx.strokeStyle = '#334155';
-      ctx.beginPath(); ctx.moveTo(left, top); ctx.lineTo(left, top + plotH); ctx.stroke();
-      ctx.beginPath(); ctx.moveTo(left + plotW, top); ctx.lineTo(left + plotW, top + plotH); ctx.stroke();
+      ctx.fillText(`${bandHigh} MHz`, left + plotW, height - 4);
     }
+
+    // Band/channel title
+    ctx.fillStyle = '#8ca0b8';
+    ctx.font = '11px system-ui, sans-serif';
+    ctx.textAlign = 'center';
+    const bandSpan = bandHigh - bandLow;
+    const isSweep = bandSpan > 40;
+    if (isSweep) {
+      ctx.fillText(`${band.label} — ${bandLow}–${bandHigh} MHz (${bandSpan} MHz)`, left + plotW / 2, 11);
+    } else {
+      ctx.fillText(`Ch ${ch} / center ${freq || '--'} MHz`, left + plotW / 2, 11);
+    }
+
+    // Draw waveform trace — position bins at their true frequencies
+    const binStartF = freq > 0 ? freq - widthMHz / 2 : bandLow;
+    const binEndF = freq > 0 ? freq + widthMHz / 2 : bandHigh;
+    const binSpan = (binEndF - binStartF) || 1;
 
     ctx.strokeStyle = '#22d3ee';
     ctx.lineWidth = 1.8;
     ctx.beginPath();
+    let started = false;
     bins.forEach((v, i) => {
-      const x = left + (i * plotW / ((bins.length - 1) || 1));
+      const binFreq = binStartF + (i + 0.5) * binSpan / bins.length;
+      const x = left + ((binFreq - bandLow) / (bandSpan || 1)) * plotW;
       const y = yFromDbm(v);
-      if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+      if (x >= left && x <= left + plotW) {
+        if (!started) { ctx.moveTo(x, y); started = true; }
+        else ctx.lineTo(x, y);
+      }
     });
     ctx.stroke();
 
-    q('waveNote').textContent = `${bins.length} FFT bins across ${widthMHz || '?'} MHz channel (Ch ${ch}, ${freq || '?'} MHz center)`;
+    // Current channel indicator on wideband view
+    if (isSweep && freq > 0 && freq >= bandLow && freq <= bandHigh) {
+      const cx = left + ((freq - bandLow) / bandSpan) * plotW;
+      ctx.strokeStyle = '#64748b';
+      ctx.setLineDash([4, 4]);
+      ctx.beginPath(); ctx.moveTo(cx, top); ctx.lineTo(cx, top + plotH); ctx.stroke();
+      ctx.setLineDash([]);
+    }
+
+    q('waveNote').textContent = isSweep
+      ? `${band.label}: ${bandLow}–${bandHigh} MHz (${Math.ceil(bandSpan / GRID_MHZ)} grid lines at ${GRID_MHZ} MHz)`
+      : `${bins.length} FFT bins across ${widthMHz || '?'} MHz channel (Ch ${ch}, ${freq || '?'} MHz center)`;
   }
 
-  function drawHeatmap(canvas, rows, scale, emptyText) {
+  function drawHeatmap(canvas, rows, scale, emptyText, bundle) {
     const { ctx, width, height } = setCanvasResolution(canvas);
     if (!rows || !rows.length) {
       drawNoData(ctx, width, height, emptyText);
@@ -511,6 +602,14 @@ cat <<'HTML'
       for (let i = 0; i < bins; i++) {
         ctx.fillStyle = heatColor(arr[i], scale.min, scale.max);
         ctx.fillRect(i * cellW, y, Math.ceil(cellW), Math.ceil(cellH));
+      }
+    }
+
+    // Overlay 5 MHz grid lines on heatmap
+    if (bundle) {
+      const band = getBandRange(bundle);
+      if (band.low > 0 && band.high > band.low) {
+        drawFreqGrid(ctx, 0, 0, width, height, band.low, band.high);
       }
     }
   }
@@ -563,8 +662,8 @@ cat <<'HTML'
     updateTop(bundle, scale);
 
     drawWaveform(bundle, scale);
-    drawHeatmap(waterfallCanvas, (bundle.waterfall || {}).rows || [], scale, 'No waterfall rows yet');
-    drawHeatmap(ambientCanvas, (bundle.ambient || {}).rows || [], scale, 'No ambient rows yet');
+    drawHeatmap(waterfallCanvas, (bundle.waterfall || {}).rows || [], scale, 'No waterfall rows yet', bundle);
+    drawHeatmap(ambientCanvas, (bundle.ambient || {}).rows || [], scale, 'No ambient rows yet', bundle);
   }
 
   async function pollBundle() {
@@ -607,6 +706,7 @@ cat <<'HTML'
     if (latestBundle) render(latestBundle);
   });
 
+  q('band').addEventListener('change', () => latestBundle && render(latestBundle));
   q('autoScale').addEventListener('change', () => latestBundle && render(latestBundle));
   q('minDbm').addEventListener('change', () => latestBundle && render(latestBundle));
   q('maxDbm').addEventListener('change', () => latestBundle && render(latestBundle));

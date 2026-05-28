@@ -178,7 +178,13 @@ radio_info_cmd() {
 JSON
 }
 
-ath_dir() { echo "/sys/kernel/debug/ieee80211/$1/ath10k"; }
+ath_dir() {
+  local phy="$1"
+  for drv in ath10k ath9k; do
+    [ -d "/sys/kernel/debug/ieee80211/$phy/$drv" ] && { echo "/sys/kernel/debug/ieee80211/$phy/$drv"; return 0; }
+  done
+  echo "/sys/kernel/debug/ieee80211/$phy/ath10k"
+}
 scan_disable() {
   local phy="$1" ctl="$(ath_dir "$phy")/spectral_scan_ctl"
   [ -f "$ctl" ] && echo disable > "$ctl" 2>/dev/null || true
@@ -199,7 +205,7 @@ spectral_reset_phy() {
   [ -f "$ctl" ] || return 1
   echo disable > "$ctl" 2>/dev/null || true
   short_sleep
-  [ -f "$binsf" ] && echo "$bins" > "$binsf" 2>/dev/null || true
+  [ -f "$binsf" ] && echo "$bins" > "$binsf" 2>/dev/null || true  # ath9k has no spectral_bins
   echo "$mode" > "$ctl" 2>/dev/null || true
   echo trigger > "$ctl" 2>/dev/null || true
 }

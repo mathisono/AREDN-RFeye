@@ -4,15 +4,15 @@ Node-side RF spectrum visibility for AREDN/OpenWrt mesh nodes with ath10k 802.11
 
 RFeye shows a real-time spectral view of your node's **current operating channel** using the ath10k hardware FFT engine. Each frame captures 72 FFT bins across the channel bandwidth (typically 20 MHz). This is a single-channel diagnostic tool — it does not scan or hop across the 5 GHz band.
 
-## Current release: r13
+## Current release: r16
 
-**r13** fixes the intermittent capture stall from r11/r12 and improves frame rate from ~0.4 fps to **~1 fps sustained** on MIPS hardware.
+**r16** adds WMAC wideband spectral scanning support for Ubiquiti XC boards (PowerBeam 5AC 500, Rocket 5AC Lite, NanoBeam AC XC) via the QCA9558 on-chip ath9k radio.
 
 ### Quick start
 
 ```sh
 # Copy IPK to the node, then:
-opkg install --force-reinstall /tmp/aredn-rfeye_0.1.0-r13_mips_24kc.ipk
+opkg install --force-reinstall /tmp/aredn-rfeye_0.1.0-r16_mips_24kc.ipk
 
 # Open the GUI:
 # http://<node-ip>:8080/cgi-bin/apps/rfeye/user
@@ -23,41 +23,47 @@ opkg install --force-reinstall /tmp/aredn-rfeye_0.1.0-r13_mips_24kc.ipk
 - AREDN node with ath10k radio (e.g., QCA9880, QCA9882)
 - OpenWrt kernel built with `ATH_DEBUG` and `ATH_SPECTRAL` (standard on AREDN)
 - `iw` and `uhttpd` packages (standard on AREDN)
+- Optional: [AREDN PR #2725](https://github.com/aredn/aredn/pull/2725) for WMAC wideband spectral scanning on Ubiquiti XC boards
 
 ### What it shows
 
 - **Waveform** — live spectrum trace of the current channel FFT
 - **Waterfall** — rolling time-vs-frequency heat map
 - **Ambient** — slower minute-peak noise history
+- **Wideband sweep** (with WMAC) — multi-channel spectral view using the dedicated ath9k scanner radio
 - All displays are approximate/relative dBm, not lab-calibrated
 
 ### What it does NOT do
 
-- No wideband sweep across the 5 GHz band — captures current channel only
-- No channel hopping or channel changes
+- No channel hopping on the production ath10k radio — wideband sweep uses the dedicated WMAC radio when available
 - No classifier or signal identification
 - No continuous writes to flash — all data stays in `/tmp/rfeye`
 
 ## Milestone history
 
-- **r13** — fixed intermittent stall, 3× frame rate improvement (head -c capture, single-awk products, fast append, spectral re-prime)
+- **r16** — WMAC wideband scanner: ath9k HT20/HT40 parser, driver auto-detect, band selector GUI, 5 MHz frequency grid
+- **r15** — ath9k spectral integration: parser, probe, agent driver detection
+- **r14** — UI cleanup, README overhaul
+- **r13** — fixed intermittent stall, 3× frame rate improvement
 - **r12** — fixed stale parser packaging (source sync issue)
 - **r11** — GUI polish (scrolling, compact cards, display scaling, legends)
 - **r10** — stability milestone (5-minute soak PASS)
 
-### Performance (r13 on KJ6DZB-WSB-ACdish5)
+### Performance
 
-| Metric | Value |
-|---|---|
-| Frame rate (sustained) | ~1.0 fps |
-| 300s soak test | 336 frames, zero stalls |
-| Storage (5 min run) | ~2.2 MB in /tmp/rfeye |
-| Memory impact | <5 MB additional |
+| Metric | ath10k (single channel) | ath9k WMAC (wideband sweep) |
+|---|---|---|
+| Frame rate | ~1.0 fps | ~130 frames/sec (all channels) |
+| Sweep rate | N/A (current channel only) | ~1 full 24-channel sweep/sec |
+| 5 min soak | 336 frames, zero stalls | ~2.6 MB, 24 channels, zero mesh impact |
+| Storage | ~2.2 MB | ~2.6 MB |
+| Bands | Current operating channel | 2.4 GHz + full 5 GHz (5100–5900 MHz) |
 
 ## Safety model
 
-- No channel hopping or channel changes
-- Current-channel background spectral scan only
+- No channel hopping on the production ath10k radio
+- WMAC (ath9k) channel scanning is safe — independent radio, receive-only
+- Current-channel background spectral scan on ath10k
 - All capture data in `/tmp/rfeye` (tmpfs, no flash writes)
 - Runtime and byte counts are capped
 - Final state after stop/reset: `spectral_scan_ctl=disable`
@@ -82,20 +88,33 @@ scripts/check-parser-source-sync.sh
 
 The installed node parser must support both `--probe` and `--resync`.
 
-## Tested node so far
+## Tested hardware
 
-First bench node:
+### ath10k (single channel)
 
 ```text
 Node: KJ6DZB-WSB-ACdish5
-AREDN/OpenWrt: AREDN 4.26.1.0 r29087-d9c5716d1d
-Kernel: Linux 6.6.119 mips
-Radio: phy0 / wlan0 / IBSS AREDN-20-v3
-Channel: 141
-Frequency: 5705 MHz
-Width: 20 MHz
-Result: r10 PASS for 5-minute stability; r11 GUI built; r12 parser packaging fixed; intermittent stall triage ongoing
+AREDN/OpenWrt: AREDN 4.26.1.0
+Radio: phy0 / wlan0 / ath10k / QCA988x
+Channel: 141 (5705 MHz, 20 MHz)
+Result: r13 PASS (5-minute soak, 1 fps sustained)
 ```
+
+### ath9k WMAC (wideband sweep)
+
+Requires [AREDN PR #2725](https://github.com/aredn/aredn/pull/2725) device tree patch.
+
+```text
+Node: KJ6DZB-WSB-ACdish5 (PowerBeam 5AC 500)
+Kernel: Linux 6.12.87 mips
+Radio: phy1 / ath9k / AR9550 Rev:0 (QCA9558 on-chip WMAC)
+Caldata: Template EEPROM fallback (no factory caldata at ART offset 0x1000)
+Bands: 2.4 GHz (2387–2484 MHz) + 5 GHz (5180–5920 MHz), 114 channels
+Spectral: HT20 mode, 56 FFT bins per sample, 20 MHz baseband per channel
+Result: r16 PASS (5-minute soak, 24 channels including DFS, zero mesh impact)
+```
+
+Also verified on Rocket 5AC Lite (stock Ubiquiti v8.7.22) — same ART layout, same blank WMAC caldata.
 
 ## Node GUI
 

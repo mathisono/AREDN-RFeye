@@ -42,16 +42,32 @@ for p in /sys/kernel/debug/ieee80211/phy*; do
   [ -d "$p" ] || continue
 
   phy="$(basename "$p")"
-  ath="$p/ath10k"
+
+  # Auto-detect driver: prefer ath10k, fall back to ath9k
+  driver=""
+  ath=""
+  if [ -d "$p/ath10k" ]; then
+    driver="ath10k"
+    ath="$p/ath10k"
+  elif [ -d "$p/ath9k" ]; then
+    driver="ath9k"
+    ath="$p/ath9k"
+  else
+    continue
+  fi
 
   [ $first_phy -eq 1 ] || echo "    ,"
   first_phy=0
 
   ctl=0; scan0=0; bins=0; count=0
+  period=0; fft_period=0; short_repeat=0
   [ -f "$ath/spectral_scan_ctl" ] && ctl=1
   [ -f "$ath/spectral_scan0" ] && scan0=1
   [ -f "$ath/spectral_bins" ] && bins=1
   [ -f "$ath/spectral_count" ] && count=1
+  [ -f "$ath/spectral_period" ] && period=1
+  [ -f "$ath/spectral_fft_period" ] && fft_period=1
+  [ -f "$ath/spectral_short_repeat" ] && short_repeat=1
 
   iface=""
   net_glob="/sys/class/ieee80211/$phy/device/net/*"
@@ -84,12 +100,16 @@ for p in /sys/kernel/debug/ieee80211/phy*; do
 
   echo "    {"
   echo "      \"phy\": \"$(json_escape "$phy")\"," 
-  echo "      \"ath10k_dir\": \"$(json_escape "$ath")\"," 
+  echo "      \"driver\": \"$(json_escape "$driver")\"," 
+  echo "      \"ath_dir\": \"$(json_escape "$ath")\"," 
   echo "      \"spectral\": {"
   echo "        \"spectral_scan_ctl\": $ctl,"
   echo "        \"spectral_scan0\": $scan0,"
   echo "        \"spectral_bins\": $bins,"
-  echo "        \"spectral_count\": $count"
+  echo "        \"spectral_count\": $count,"
+  echo "        \"spectral_period\": $period,"
+  echo "        \"spectral_fft_period\": $fft_period,"
+  echo "        \"spectral_short_repeat\": $short_repeat"
   echo "      },"
   echo "      \"iface\": \"$(json_escape "$iface")\"," 
   echo "      \"survey_fields\": {"

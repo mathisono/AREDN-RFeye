@@ -7,6 +7,7 @@
 /* RFeye spectral raw parser/probe.
  *
  * Supports:
+ * - ath9k relay format: type-1 HT20 (56 bins), type-2 HT40 (128 bins)
  * - legacy ath10k-style sample fixtures (type-3 TLV-ish)
  * - the node's actual ff93-framed fixed-stride raw capture stream
  */
@@ -231,10 +232,79 @@ static int decode_ff93_record(const uint8_t *rec, size_t rec_len, frame_t *out) 
   return out->valid;
 }
 
+/* ath9k HT20 decoder: type=1, payload=73 bytes (17 header + 56 bins)
+ * Layout from spectral_common.h:
+ *   u8 max_exp, be16 freq, s8 rssi, s8 noise, be16 max_magnitude,
+ *   u8 max_index, u8 bitmap_weight, be64 tsf, u8 data[56]
+ */
+static int decode_ht20(const uint8_t *buf, size_t len, frame_t *f) {
+  if (len < 73) return 0;
+  init_frame(f, 10);
+  f->header_size = 17;
+  f->width_mhz = 20;
+  f->width_raw = 20;
+  f->max_exp = buf[0];
+  f->freq1_mhz = be16(&buf[1]);
+  f->freq2_mhz = 0;
+  f->rssi = (uint8_t)buf[3];
+  f->noise_dbm = (int8_t)buf[4];
+  f->max_magnitude = be16(&buf[5]);
+  f->max_index = (int8_t)buf[7];
+  /* buf[8] = bitmap_weight, skip */
+  f->tsf = be64(&buf[9]);
+  f->relpwr_db = 0;
+  f->avgpwr_db = 0;
+  f->bins_offset = 17;
+  f->bins_len = 56;
+  f->freq_valid = plausible_freq(f->freq1_mhz);
+  f->bins_plausible = 1;
+  f->valid = 1;
+  f->score = score_frame(f) + bins_score(&buf[f->bins_offset], f->bins_len);
+  return f->valid;
+}
+
+/* ath9k HT40 decoder: type=2, payload=24 header + 128 bins
+ * Layout from spectral_common.h:
+ *   u8 upper_max_exp, u8 lower_max_exp, be16 freq, s8 upper_rssi, s8 lower_rssi,
+ *   be64 tsf, s8 upper_noise, s8 lower_noise, be16 upper_max_magnitude,
+ *   be16 lower_max_magnitude, u8 upper_max_index, u8 lower_max_index,
+ *   u8 upper_bitmap_weight, u8 lower_bitmap_weight, u8 data[128]
+ */
+static int decode_ht40(const uint8_t *buf, size_t len, frame_t *f) {
+  if (len < 152) return 0;
+  init_frame(f, 11);
+  f->header_size = 24;
+  f->width_mhz = 40;
+  f->width_raw = 40;
+  f->max_exp = buf[0]; /* upper_max_exp */
+  f->freq1_mhz = be16(&buf[2]);
+  f->freq2_mhz = 0;
+  f->rssi = (uint8_t)buf[4]; /* upper_rssi */
+  f->tsf = be64(&buf[6]);
+  f->noise_dbm = (int8_t)buf[14]; /* upper_noise */
+  f->max_magnitude = be16(&buf[16]); /* upper_max_magnitude */
+  f->max_index = (int8_t)buf[20]; /* upper_max_index */
+  f->relpwr_db = 0;
+  f->avgpwr_db = 0;
+  f->bins_offset = 24;
+  f->bins_len = 128;
+  f->freq_valid = plausible_freq(f->freq1_mhz);
+  f->bins_plausible = 1;
+  /* Reject if freq not plausible — HT40 false positives are common
+   * because ath9k hardware almost always emits type-1 HT20 samples,
+   * and a stray 0x02 byte can look like a type-2 TLV header. */
+  f->valid = f->freq_valid;
+  if (!f->valid) return 0;
+  f->score = score_frame(f) + bins_score(&buf[f->bins_offset], f->bins_len);
+  return f->valid;
+}
+
 static const char *layout_name(int layout_id) {
   switch (layout_id) {
     case 2: return "compact";
     case 3: return "ff93_fixed";
+    case 10: return "ht20";
+    case 11: return "ht40";
     default: return "current";
   }
 }
@@ -465,18 +535,48 @@ static void emit_probe_json(const uint8_t *data, size_t size) {
   }
   for (size_t i = 0; i < (size < 4096 ? size : 4096); i++) hist[data[i]]++;
 
-  scan_summary_t v3be, v3le, v4be, v4le, ff93;
+  scan_summary_t v3be, v3le, v4be, v4le, ff93, ath9k_scan;
   scan_tlv3_variant(data, scan_size, "tlv3_be", 0, &v3be);
   scan_tlv3_variant(data, scan_size, "tlv3_le", 1, &v3le);
   scan_tlv4_variant(data, scan_size, "tlv4_be", 0, &v4be);
   scan_tlv4_variant(data, scan_size, "tlv4_le", 1, &v4le);
   scan_ff93_variant(data, scan_size, &ff93);
 
+  /* ath9k type-1/2 scan */
+  scan_init(&ath9k_scan, "ath9k_ht20_ht40");
+  {
+    size_t offs9k[1024]; size_t off9k_count = 0;
+    for (size_t off = 0; off + 3 <= scan_size; ) {
+      uint8_t type = data[off];
+      uint16_t len = be16(&data[off + 1]);
+      if ((type == 1 || type == 2) && len > 0 && off + 3 + (size_t)len <= scan_size) {
+        if (off9k_count < 1024) offs9k[off9k_count++] = off;
+        ath9k_scan.candidate_count++;
+        ath9k_scan.type_counts[type]++;
+        scan_add_first(&ath9k_scan, off, type, 0, len, &data[off + 3], len);
+        frame_t f;
+        int ok = (type == 1) ? decode_ht20(&data[off + 3], len, &f)
+                             : decode_ht40(&data[off + 3], len, &f);
+        if (ok) {
+          ath9k_scan.plausible_count++;
+          scan_add_plausible(&ath9k_scan, off, type, 0, len, &data[off + 3], len);
+        }
+        off += 3 + (size_t)len;
+      } else {
+        off++;
+      }
+    }
+    scan_finalize(&ath9k_scan, offs9k, off9k_count);
+    ath9k_scan.score = (int)((ath9k_scan.plausible_count * 1000) / (ath9k_scan.candidate_count + 1) +
+                             (ath9k_scan.sequential_chain ? 500 : 0));
+  }
+
   const scan_summary_t *best = &v3be;
   if (v3le.score > best->score) best = &v3le;
   if (v4be.score > best->score) best = &v4be;
   if (v4le.score > best->score) best = &v4le;
   if (ff93.score > best->score) best = &ff93;
+  if (ath9k_scan.score > best->score) best = &ath9k_scan;
 
   printf("{\"ok\":true,\"file_size\":%zu,\"probe_scan_window\":%zu,\"first_bytes\":\"", size, scan_size);
   hex_bytes(data, size < 64 ? size : 64);
@@ -486,7 +586,8 @@ static void emit_probe_json(const uint8_t *data, size_t size) {
   print_scan_summary(&v3le); printf(",");
   print_scan_summary(&v4be); printf(",");
   print_scan_summary(&v4le); printf(",");
-  print_scan_summary(&ff93);
+  print_scan_summary(&ff93); printf(",");
+  print_scan_summary(&ath9k_scan);
   printf("},\"best_scoring_variant\":\"%s\",\"best_guess\":\"%s\",", best->name, best->name);
   printf("\"likely_binary\":%s,", (zero_bytes > 0 || nonzero_bytes > 0) ? "true" : "false");
   printf("\"count_zero_bytes\":%zu,\"count_nonzero_bytes\":%zu,", zero_bytes, nonzero_bytes);
@@ -581,14 +682,77 @@ static int parse_type3_stream(const uint8_t *data, size_t size, const char *phy,
   return emitted > 0 ? 0 : 1;
 }
 
+/* ath9k TLV stream parser: handles type-1 (HT20) and type-2 (HT40) records.
+ * Each record: u8 type, be16 length, then <length> bytes of payload.
+ */
+static int parse_ath9k_stream(const uint8_t *data, size_t size, const char *phy, long limit, long bins_limit,
+                              int debug, int stats, int resync, size_t *skipped_out) {
+  size_t emitted = 0;
+  size_t skipped = 0;
+  size_t pos = 0;
+  while (pos + 3 <= size) {
+    uint8_t type = data[pos];
+    uint16_t len = be16(&data[pos + 1]);
+    if ((type != 1 && type != 2) || !len || pos + 3 + (size_t)len > size) {
+      if (resync) { pos++; skipped++; continue; }
+      break;
+    }
+    const uint8_t *payload = &data[pos + 3];
+    frame_t f;
+    int ok = 0;
+    if (type == 1) ok = decode_ht20(payload, len, &f);
+    else if (type == 2) ok = decode_ht40(payload, len, &f);
+    if (!ok) {
+      if (debug) fprintf(stderr, "ath9k type %u at %zu len=%u rejected\n", type, pos, len);
+      if (resync) { pos++; skipped++; continue; }
+      break;
+    }
+    if (debug) fprintf(stderr, "ath9k %s at offset %zu len=%u freq=%u bins=%zu score=%d\n",
+                       layout_name(f.layout_id), pos, len, f.freq1_mhz, f.bins_len, f.score);
+    /* bins_offset is relative to payload start; adjust for print */
+    print_frame_json(phy, &f, &payload[f.bins_offset], f.bins_len, bins_limit);
+    emitted++;
+    pos += 3 + (size_t)len;
+    if (limit >= 0 && (long)emitted >= limit) break;
+  }
+  if (stats) fprintf(stderr, "{\"frames_emitted\":%zu,\"skipped_bytes\":%zu}\n", emitted, skipped);
+  if (skipped_out) *skipped_out = skipped;
+  return emitted > 0 ? 0 : 1;
+}
+
+/* Count type-1 and type-2 TLV headers that look like ath9k spectral records */
+static size_t count_ath9k_tlv(const uint8_t *data, size_t size) {
+  size_t c = 0;
+  size_t pos = 0;
+  while (pos + 3 <= size) {
+    uint8_t type = data[pos];
+    uint16_t len = be16(&data[pos + 1]);
+    if ((type == 1 && len == 73) || (type == 2 && len == 152)) {
+      c++;
+      pos += 3 + len;
+    } else {
+      pos++;
+    }
+  }
+  return c;
+}
+
 static int parse_mode(const uint8_t *data, size_t size, const char *phy, long limit, long bins_limit,
                       int debug, int stats, int resync) {
+  /* Try ath9k relay format first (type 1/2 TLV) */
+  size_t ath9k_count = count_ath9k_tlv(data, size);
+  if (ath9k_count >= 3) {
+    int rc = parse_ath9k_stream(data, size, phy, limit, bins_limit, debug, stats, resync, NULL);
+    if (rc == 0) return 0;
+  }
+  /* Then try ff93 (ath10k node format) */
   size_t ff93_markers = count_ff93_markers(data, size);
   if (ff93_markers >= 3) {
     int rc = parse_ff93_stream(data, size, phy, limit, bins_limit, debug, stats, NULL);
     if (rc == 0) return 0;
     if (!resync) return rc;
   }
+  /* Fall back to type-3 TLV */
   return parse_type3_stream(data, size, phy, limit, bins_limit, debug, stats, resync, NULL);
 }
 
