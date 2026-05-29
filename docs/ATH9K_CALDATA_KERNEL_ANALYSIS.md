@@ -260,9 +260,103 @@ cause of the calibration problem.**
 
 ---
 
-## 5. Available Solutions
+## 5. Why Mainline ath9k Differs from Proprietary ath_hal
 
-### 5.1 Current Approach: Share PCI Caldata (0x5000) ← What We Use
+In Ubiquiti's proprietary `ath_hal` (and the FreeBSD HAL port), there is
+a massive array of hardcoded fallback templates (e.g., `ar9300template_generic`,
+`ar9300template_ap121`, etc.). If the HAL reads a blank or corrupted EEPROM,
+it simply loads one of these default templates into memory and carries on.
+
+When Atheros/Qualcomm released ath9k to the upstream Linux kernel, they
+**intentionally stripped out most of these hardcoded template arrays** to
+reduce source code bloat. Upstream ath9k retains a single `ar9300_default`
+template (with MAC `00:02:03:04:05:06`) that gets loaded into memory during
+the restore process, but **assumes that if a radio is present, valid
+calibration data will be provided by the system** — either via flash,
+OTP, device tree nvmem cells, or the firmware loader.
+
+When you point mainline ath9k at an ART partition filled with 0xFF:
+
+1. `ar9300_eeprom_restore_flash()` reads the data via `nvram_read()`
+2. It checks `txrxMask` — `0xFF` is treated as invalid (same as `0x00`)
+3. Falls through; default template is loaded into memory
+4. EEPROM read attempts against the nvmem blob all fail (all 0xFF, no headers)
+5. OTP reads from hardware fail (OTP is empty on these boards)
+6. `goto fail; return -1;` — **radio init aborts**
+
+The proprietary `ath_hal` would accept the template and continue. Mainline
+ath9k treats the failure as fatal.
+
+---
+
+## 6. Available Solutions
+
+### 6.1 Firmware Fallback via `qca,no-eeprom` (RECOMMENDED)
+
+When the DTS WMAC node includes the `qca,no-eeprom` property and does
+**not** bind to any ART partition caldata, ath9k falls back to the Linux
+firmware loader (`request_firmware()`). From `init.c` line ~680:
+
+```c
+if (of_property_read_bool(np, "qca,no-eeprom")) {
+    scnprintf(eeprom_name, sizeof(eeprom_name),
+              "ath9k-eeprom-%s-%s.bin",
+              ath_bus_type_to_string(bus_type), dev_name(ah->dev));
+    ret = ath9k_eeprom_request(sc, eeprom_name);
+    ...
+}
+```
+
+For the QCA9558 WMAC at AHB address `0x18100000`, the driver requests:
+
+```
+/lib/firmware/ath9k-eeprom-ahb-18100000.wmac.bin
+```
+
+This file must contain a valid AR9300 EEPROM binary with correct magic
+and checksum. It can be a pre-compiled dump of the generic AR9300 default
+template.
+
+**Real-world precedent:** The Meraki MR18 (QCA9557) uses exactly this
+approach — its DTS has `qca,no-eeprom` on the WMAC node:
+
+```dts
+&wmac {
+    status = "okay";
+    qca,no-eeprom;
+};
+```
+
+**DTS change required** (in our AREDN patch):
+
+```dts
+&wmac {
+    status = "okay";
+    qca,no-eeprom;
+    /* Do NOT bind to &art — ART 0x1000 is blank on XC boards */
+};
+```
+
+**Build change:** Include the template binary in the firmware image at
+`/lib/firmware/ath9k-eeprom-ahb-18100000.wmac.bin`.
+
+**Pros:**
+- Standard, upstream-friendly mechanism
+- No kernel patches
+- No flash writes to production hardware
+- Exactly matches how other boards with missing caldata handle this
+- Template file can be improved/replaced without reflashing
+
+**Cons:**
+- Must generate/obtain a valid AR9300 template binary
+- Template MAC is `00:02:03:04:05:06` (must be overridden in DTS or at runtime)
+- Generic caldata — not per-board calibrated
+
+**Assessment:** This is the cleanest, most upstream-friendly approach.
+For a receive-only spectrum analyzer radio, a generic template is perfectly
+adequate.
+
+### 6.2 Current Approach: Share PCI Caldata (0x5000) ← What We Use Now
 
 The DTS points the WMAC at `<&art 0x5000>` (the ath10k PCI radio's
 factory calibration). This data has a valid structure (txrxMask=0x77,
@@ -277,46 +371,14 @@ proper AR9300 format) and passes all checks.
 - Calibration data is for a different RF path (different LNA/PA/antenna)
 - Absolute power readings will be systematically wrong
 - Per-frequency gain slope won't match the WMAC's actual response
+- Sharing caldata between two different drivers (ath10k + ath9k) is fragile
 
-**Assessment:** Acceptable for receive-only spectral scanning. The FFT
-hardware produces valid magnitude data regardless. Relative comparisons
-within a sweep are valid. Absolute dBm values carry ~5-15 dB systematic
-error.
+**Assessment:** Works for receive-only spectral scanning but isn't the
+cleanest approach. The FFT hardware produces valid magnitude data
+regardless. Relative comparisons within a sweep are valid. Absolute dBm
+values carry ~5-15 dB systematic error.
 
-### 5.2 Kernel Patch: Accept Template on Fail
-
-A small patch to `ar9300_eeprom_restore_internal()` could make the
-default template fallback work, matching the proprietary driver's behavior:
-
-```diff
- fail:
- 	kfree(word);
--	return -1;
-+	/* If EEPROM/OTP failed but template is loaded, use it.
-+	 * This matches the proprietary ath_hal behavior for SoCs
-+	 * without factory WMAC calibration (e.g., Rocket 5AC Lite XC).
-+	 */
-+	ath_dbg(common, EEPROM,
-+		"No valid EEPROM/OTP found, using default template\n");
-+	return 0;
-```
-
-**Pros:**
-- Exactly replicates Ubiquiti's stock behavior
-- Uses well-tested default values
-- No per-board data needed
-
-**Cons:**
-- Kernel patch — must be carried in OpenWrt package
-- Default template is even more generic than PCI caldata
-- Template MAC is `00:02:03:04:05:06` (must be overridden)
-- May have unintended effects on other platforms
-
-**Assessment:** Worth considering if we want to match stock behavior,
-but the PCI caldata approach (5.1) is currently better because it at least
-has per-board factory data.
-
-### 5.3 Write Valid Caldata to ART 0x1000
+### 6.3 Write Valid Caldata to ART 0x1000
 
 Flash a properly structured AR9300 EEPROM to the blank 0x1000 region.
 The data could come from:
@@ -328,21 +390,22 @@ The data could come from:
 **Pros:**
 - Clean, standard approach
 - No kernel patches needed
-- DTS works as designed
+- DTS works as designed with `<&art 0x1000>`
 
 **Cons:**
 - Flash writes to production hardware carry brick risk
 - Template/borrowed data still isn't per-board calibrated
 - Requires understanding the AR9300 compressed EEPROM format
 
-### 5.4 Runtime Noise Floor Correction (Software)
+### 6.4 Runtime Noise Floor Correction (Software)
 
-Leave caldata as-is (sharing 0x5000), apply corrections in the RFeye
-agent software based on runtime noise floor calibration from the driver.
+Leave caldata as-is (sharing 0x5000 or using firmware template), apply
+corrections in the RFeye agent software based on runtime noise floor
+calibration from the driver.
 
 **Pros:**
 - No flash writes, no kernel patches
-- Runtime NF cal partially compensates for wrong caldata
+- Runtime NF cal partially compensates for wrong/generic caldata
 - Can be done entirely in userspace
 
 **Cons:**
@@ -351,7 +414,7 @@ agent software based on runtime noise floor calibration from the driver.
 
 ---
 
-## 6. Key Source Code References
+## 7. Key Source Code References
 
 | File | Function/Symbol | Role |
 |------|----------------|------|
@@ -369,7 +432,7 @@ agent software based on runtime noise floor calibration from the driver.
 
 ---
 
-## 7. Confirmed Hardware Facts (Stock Rocket 5AC Lite)
+## 8. Confirmed Hardware Facts (Stock Rocket 5AC Lite)
 
 Verified via SSH to stock firmware (2026-05-28):
 
@@ -389,7 +452,33 @@ Verified via SSH to stock firmware (2026-05-28):
 
 ---
 
-## 8. Conclusion
+## 9. Generating the Template Binary
+
+To create the firmware file for the `qca,no-eeprom` approach, we need a
+valid AR9300 EEPROM binary. Options:
+
+### Option A: Extract from a board with valid WMAC caldata
+
+A NanoBeam AC Gen2 XC has factory data at ART+0x1000:
+```bash
+# On a Gen2 XC board:
+dd if=/dev/mtd5 bs=1 skip=4096 count=2116 of=ath9k-eeprom-ahb-18100000.wmac.bin
+```
+
+### Option B: Build from the kernel's default template
+
+The `ar9300_default` struct in `ar9003_eeprom.c` can be compiled into a
+standalone binary. This requires serializing the struct into the AR9300
+compressed EEPROM wire format with correct magic (0x5cb8) and checksums.
+
+### Option C: Use ath9k-caldata tools
+
+The `ath9k-caldata` package or similar tools can generate a minimal valid
+EEPROM binary from template parameters.
+
+---
+
+## 10. Conclusion
 
 The Rocket 5AC Lite (XC) WMAC was **never factory-calibrated by Ubiquiti**.
 They designed it as a spectrum analyzer appendage that runs on generic
