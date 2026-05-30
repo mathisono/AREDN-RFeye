@@ -278,5 +278,190 @@ silicon, but this is the first cross-SoC test.
 | 9 | Cleanup | Caldata removed, ath9k unloaded |
 | 10 | Reboot persistence | WMAC survives reboot |
 
-**Minimum pass:** Tests 1–6 and 8 all pass. Tests 7, 9, 10 are valuable
+**Minimum pass (XC):** Tests 1–6 and 8 all pass. Tests 7, 9, 10 are valuable
 but not blockers for the PR #2730 compliance proof.
+
+**Minimum pass (WA):** Tests 11–14 all pass. Test 15 is stretch.
+
+---
+
+## WA Board Tests (Native Caldata)
+
+These tests run on a WA board (PowerBeam 5AC Gen2, PBE-5AC-Gen2, sysid
+0xe3d6) flashed with the same AREDN nightly containing PR #2730.
+
+The WA board has **factory WMAC caldata at ART+0x1000** — unlike the XC
+board, this is the caldata that was factory-written for the actual WMAC
+RF chain on this board. This is the ideal test case because the caldata
+is correct for the hardware.
+
+### Prerequisites (WA)
+
+1. Flash AREDN nightly (with PR #2730) onto the WA PowerBeam 5AC Gen2
+2. Verify node boots and mesh works (ath10k radio)
+3. SSH access (port 2222)
+4. Copy r17 IPK to node
+
+> **Note:** PR #2730 currently targets Rocket 5AC Lite and PowerBeam 5AC
+> 500 (XC boards). The WA PBE-5AC-Gen2 may not be in the PR #2730 DTS
+> patch list. If the WMAC DTS node is absent on WA, this test set
+> documents what would be needed to extend PR #2730 to WA boards.
+
+---
+
+### Test 11: WA Board Identity and ART Content
+
+```bash
+# Confirm board type
+cat /tmp/sysinfo/model
+cat /tmp/sysinfo/board_name
+
+# Confirm sysid
+grep sysid /etc/board.json 2>/dev/null || \
+  dd if=$(grep -i '"art"' /proc/mtd | sed 's/mtd\([0-9]*\):.*/\/dev\/mtdblock\1/' | head -1) \
+  bs=1 skip=12 count=2 2>/dev/null | hexdump -v -e '"0x" 1/1 "%02x" 1/1 "%02x" "\n"'
+
+# Verify ART+0x1000 has real caldata (NOT blank)
+ART_DEV=$(grep -i '"art"' /proc/mtd | sed 's/mtd\([0-9]*\):.*/\/dev\/mtdblock\1/' | head -1)
+echo "--- ART+0x1000 (first 32 bytes) ---"
+dd if=$ART_DEV bs=1 skip=4096 count=32 2>/dev/null | hexdump -C
+```
+
+**Expected:**
+- Model: `Ubiquiti PowerBeam 5AC Gen2` or similar WA board
+- Sysid: `0xe3d6`
+- ART+0x1000: starts with `02 02` followed by MAC — NOT all `0xFF`
+
+---
+
+### Test 12: Extract Native WA Caldata and Provision
+
+Instead of using the shipped WA reference caldata (which is from a
+*different* WA board), extract this board's own factory caldata from ART
+and use it. This is the gold-standard test — correct caldata for the
+exact hardware.
+
+```bash
+# Extract this board's own WMAC caldata from ART+0x1000
+ART_DEV=$(grep -i '"art"' /proc/mtd | sed 's/mtd\([0-9]*\):.*/\/dev\/mtdblock\1/' | head -1)
+dd if=$ART_DEV bs=1 skip=4096 count=1024 of=/tmp/my-wmac-caldata.bin 2>/dev/null
+
+# Verify it's real caldata
+hexdump -C /tmp/my-wmac-caldata.bin | head -3
+# Should start with 02 02 <mac bytes>, NOT ff ff ff ff
+
+# Install as firmware file
+mkdir -p /lib/firmware
+cp /tmp/my-wmac-caldata.bin /lib/firmware/ath9k-eeprom-ahb-18100000.wmac.bin
+
+# Reload ath9k
+rmmod ath9k 2>/dev/null; sleep 1; modprobe ath9k
+
+# Wait and check
+sleep 3
+iw phy
+ls /sys/kernel/debug/ieee80211/phy*/ath9k/spectral_scan_ctl 2>/dev/null
+```
+
+**Expected:**
+- Native caldata extracted (1024 bytes, header `02 02`)
+- ath9k loads and initializes WMAC with factory caldata
+- phy1 appears with spectral_scan_ctl
+
+**If this works, it proves:**
+- PR #2730 `qca,no-eeprom` + filesystem caldata path works
+- Factory-correct WMAC caldata from ART produces a working spectral radio
+- The firmware path guess (`ath9k-eeprom-ahb-18100000.wmac.bin`) is correct
+
+**If the firmware path is wrong:**
+- Check `dmesg | grep -i firmware` for the actual path
+- Record it — this is the critical piece for all boards
+
+---
+
+### Test 13: Compare Native vs Reference Caldata
+
+Run spectral scans with both caldata sources and compare.
+
+```bash
+# --- Run A: Native caldata (from this board's ART) ---
+ART_DEV=$(grep -i '"art"' /proc/mtd | sed 's/mtd\([0-9]*\):.*/\/dev\/mtdblock\1/' | head -1)
+dd if=$ART_DEV bs=1 skip=4096 count=1024 of=/tmp/native-caldata.bin 2>/dev/null
+cp /tmp/native-caldata.bin /lib/firmware/ath9k-eeprom-ahb-18100000.wmac.bin
+rmmod ath9k 2>/dev/null; sleep 1; modprobe ath9k; sleep 3
+
+# Record noise floor with native caldata
+cat /sys/kernel/debug/ieee80211/phy1/ath9k/dump_nfcal 2>/dev/null > /tmp/nfcal-native.txt
+
+# Quick spectral capture
+/usr/sbin/rfeye-agent raw_capture_test 10 > /tmp/spectral-native.json
+
+# --- Run B: Reference caldata (from shipped WA reference) ---
+cp /usr/lib/rfeye/caldata/ath9k-caldata-wmac-wa-reference.bin \
+   /lib/firmware/ath9k-eeprom-ahb-18100000.wmac.bin
+rmmod ath9k 2>/dev/null; sleep 1; modprobe ath9k; sleep 3
+
+# Record noise floor with reference caldata
+cat /sys/kernel/debug/ieee80211/phy1/ath9k/dump_nfcal 2>/dev/null > /tmp/nfcal-reference.txt
+
+# Quick spectral capture
+/usr/sbin/rfeye-agent raw_capture_test 10 > /tmp/spectral-reference.json
+
+# --- Compare ---
+echo "=== NATIVE NF ==="
+cat /tmp/nfcal-native.txt
+echo "=== REFERENCE NF ==="
+cat /tmp/nfcal-reference.txt
+echo "=== NATIVE CAPTURE ==="
+cat /tmp/spectral-native.json
+echo "=== REFERENCE CAPTURE ==="
+cat /tmp/spectral-reference.json
+```
+
+**What to look for:**
+- Noise floor difference between native and reference caldata
+- Both should produce frames > 0
+- If NF differs by >5 dB, native caldata is measurably better
+- If both produce similar NF, the reference caldata is adequate for
+  spectral scanning even across boards
+
+---
+
+### Test 14: WA Production Radio Safety
+
+```bash
+# Same as Test 8 but on WA board
+ping -c3 localnode 2>/dev/null || echo "mesh ping failed"
+iw dev wlan0 info
+iwinfo wlan0 assoclist 2>/dev/null | head -5
+```
+
+**Expected:** ath10k mesh completely unaffected by WMAC provisioning.
+
+---
+
+### Test 15: WA Wideband Sweep (Stretch)
+
+If Tests 11–14 pass, try a full wideband sweep:
+
+```bash
+/usr/sbin/rfeye-agent start 60
+sleep 65
+/usr/sbin/rfeye-agent capture_status
+/usr/sbin/rfeye-agent waveform
+```
+
+**Expected:** Multi-channel spectral data with factory-correct caldata.
+This is the first sweep with proper WMAC calibration on AREDN.
+
+---
+
+## WA Test Success Criteria
+
+| # | Test | Pass condition |
+|---|------|---------------|
+| 11 | Board identity | WA board confirmed, ART+0x1000 has `02 02` caldata |
+| 12 | Native caldata provision | phy1 appears, spectral_scan_ctl present |
+| 13 | Native vs reference compare | Both produce frames; NF values recorded |
+| 14 | Production safe | ath10k mesh still up |
+| 15 | Wideband sweep (stretch) | Multi-channel spectral data captured |
