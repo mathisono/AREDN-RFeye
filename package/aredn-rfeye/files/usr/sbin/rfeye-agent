@@ -1489,6 +1489,11 @@ case "$cmd" in
   raw_inspect) raw_inspect_cmd ;;
   parser_probe) parser_probe_cmd ;;
   raw_capture_test) raw_capture_test_cmd "$@" ;;
+  wmac_status) /usr/lib/rfeye/rfeye-wmac-provision.sh status ;;
+  wmac_provision) /usr/lib/rfeye/rfeye-wmac-provision.sh provision ;;
+  wmac_install) /usr/lib/rfeye/rfeye-wmac-provision.sh install ;;
+  wmac_reload) /usr/lib/rfeye/rfeye-wmac-provision.sh reload ;;
+  wmac_remove) /usr/lib/rfeye/rfeye-wmac-provision.sh remove ;;
   __capture_worker) capture_worker "$@" ;;
   reset) reset_cmd "${1:-$(resolve_phy)}" ;;
   start) start_cmd "$@" ;;
