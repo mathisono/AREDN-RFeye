@@ -108,7 +108,7 @@ Requires [AREDN PR #2725](https://github.com/aredn/aredn/pull/2725) device tree 
 Node: KJ6DZB-WSB-ACdish5 (PowerBeam 5AC 500)
 Kernel: Linux 6.12.87 mips
 Radio: phy1 / ath9k / AR9550 Rev:0 (QCA9558 on-chip WMAC)
-Caldata: Template EEPROM fallback (no factory caldata at ART offset 0x1000)
+Caldata: PCI caldata from ART 0x5000 (bench-only fallback; ART 0x1000 is blank on Gen1 XC boards — see docs/WMAC_CALDATA_RESEARCH_AND_TESTING_PLAN.md)
 Bands: 2.4 GHz (2387–2484 MHz) + 5 GHz (5180–5920 MHz), 114 channels
 Spectral: HT20 mode, 56 FFT bins per sample, 20 MHz baseband per channel
 Result: r16 PASS (5-minute soak, 24 channels including DFS, zero mesh impact)
@@ -153,6 +153,8 @@ No classifier or channel-hopping features yet. Current focus:
 
 - [`OPENCLAW_WORKING_BRIEF.md`](OPENCLAW_WORKING_BRIEF.md) — current working brief and task context
 - [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) — system architecture
+- [`docs/ONCHIP_SCANNER_RADIO_RESEARCH.md`](docs/ONCHIP_SCANNER_RADIO_RESEARCH.md) — QCA9558 WMAC hardware research
+- [`docs/WMAC_CALDATA_RESEARCH_AND_TESTING_PLAN.md`](docs/WMAC_CALDATA_RESEARCH_AND_TESTING_PLAN.md) — caldata accuracy research and testing plan
 - [`docs/TRIAGE_INTERMITTENT_STALL_KJ6DZB_WSB_ACDISH5.md`](docs/TRIAGE_INTERMITTENT_STALL_KJ6DZB_WSB_ACDISH5.md) — r13 stall root-cause analysis
 - [`docs/BUILD_AND_NODE_TEST.md`](docs/BUILD_AND_NODE_TEST.md) — build and test instructions
 - [`artifacts/ipk/BUILD_NOTES.md`](artifacts/ipk/BUILD_NOTES.md) — IPK build history
