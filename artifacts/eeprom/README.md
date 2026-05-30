@@ -44,3 +44,39 @@ WMAC calibration data on any board in the XC/WA family.
 The WMAC on this WA board is used by Ubiquiti's AirView spectral analyzer
 (`airview1` interface, monitor mode, `ath_spectral` module). This is the
 same use case as RFeye's wideband spectral scanner.
+
+---
+
+## eeprom_xc_pbe5ac500_aredn.bin
+
+Full 64 KB ART partition dump from the XC bench node running AREDN.
+
+| Field | Value |
+|-------|-------|
+| **Source** | PowerBeam 5AC 500 (PBE-5AC-500) |
+| **Board type** | XC |
+| **Firmware** | AREDN 4.26.1.0 (OpenWrt, kernel 6.12.87) |
+| **SysID** | 0xe3d5 |
+| **MTD partition** | mtd7 "art" (64 KB) |
+| **Extracted** | 2026-05-29 via `dd if=/dev/mtdblock7 bs=65536 count=1` |
+| **MD5** | `74e82a3becf13c1479e16c9867a123fb` |
+| **SHA256** | `62761919c4720a2adc2d7f5036b719fabdb69c0b87af338c676670968bba1fd4` |
+
+### Partition Layout
+
+| Offset | Size | Content |
+|--------|------|---------|
+| 0x0000 | 32 bytes | Header: MAC1 `f4:92:bf:bd:8a:de`, MAC2 `f6:92:bf:bd:8a:de`, SysID `0xe3d5` |
+| 0x1000 | 1024 bytes | **ALL 0xFF — BLANK** — no WMAC caldata |
+| 0x5000 | 2113 bytes | PCI caldata — AR9300 compressed (`44 08`), MAC `f4:92:bf:bc:8a:de`, Board ID `CUS223-720-S0849` |
+| 0x5A00+ | — | 12,209 non-0xFF bytes |
+
+### Comparison with WA Board
+
+See `docs/The XC vs. WA Divide.md` for full analysis.
+
+| Region | WA (PBE-5AC-Gen2) | XC (PBE-5AC-500) |
+|--------|-------------------|-------------------|
+| WMAC (0x1000) | 1021 bytes, template `02 02` | **ALL 0xFF** |
+| PCI (0x5000) | Compressed `44 08`, `cus223-022-n1725` | Compressed `44 08`, `CUS223-720-S0849` |
+| PCI byte differences | — | 289/2128 bytes differ (per-unit factory cal) |
