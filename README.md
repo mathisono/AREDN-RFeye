@@ -23,7 +23,7 @@ opkg install --force-reinstall /tmp/aredn-rfeye_0.1.0-r16_mips_24kc.ipk
 - AREDN node with ath10k radio (e.g., QCA9880, QCA9882)
 - OpenWrt kernel built with `ATH_DEBUG` and `ATH_SPECTRAL` (standard on AREDN)
 - `iw` and `uhttpd` packages (standard on AREDN)
-- Optional: [AREDN PR #2725](https://github.com/aredn/aredn/pull/2725) for WMAC wideband spectral scanning on Ubiquiti XC boards
+- Optional: [AREDN PR #2730](https://github.com/aredn/aredn/pull/2730) for WMAC wideband spectral scanning on Ubiquiti AC boards (Rocket 5AC Lite, PowerBeam 5AC 500). PR #2730 provides the DTS hooks; RFeye provides the caldata firmware file.
 
 ### What it shows
 
@@ -102,7 +102,7 @@ Result: r13 PASS (5-minute soak, 1 fps sustained)
 
 ### ath9k WMAC (wideband sweep)
 
-Requires [AREDN PR #2725](https://github.com/aredn/aredn/pull/2725) device tree patch.
+Requires [AREDN PR #2730](https://github.com/aredn/aredn/pull/2730) (merged) — DTS hooks with `qca,no-eeprom`. Supersedes PR #2725.
 
 ```text
 Node: KJ6DZB-WSB-ACdish5 (PowerBeam 5AC 500)
@@ -142,19 +142,27 @@ FFT frame frequency metadata is kept for debugging only. Implausible FFT metadat
 
 ## Development focus
 
-No classifier or channel-hopping features yet. Current focus:
+**r17 (next):** Caldata self-provisioning for AREDN PR #2730. RFeye will install the
+appropriate WMAC caldata firmware file and reload ath9k to initialize the spectrum
+radio. See [`docs/ROADMAP.md`](docs/ROADMAP.md) for the full plan.
 
-1. UI polish and documentation
-2. Storage monitoring for longer runs (>5 minutes)
-3. Production hardening (logging, error paths)
-4. Keep capture data under `/tmp/rfeye` and ensure final `spectral_scan_ctl=disable`
+Current focus:
+
+1. Caldata provisioning agent for PR #2730 `qca,no-eeprom` model
+2. UI polish and documentation
+3. Storage monitoring for longer runs (>5 minutes)
+4. Production hardening (logging, error paths)
+5. Keep capture data under `/tmp/rfeye` and ensure final `spectral_scan_ctl=disable`
 
 ## Documentation
 
 - [`OPENCLAW_WORKING_BRIEF.md`](OPENCLAW_WORKING_BRIEF.md) — current working brief and task context
 - [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) — system architecture
+- [`docs/ROADMAP.md`](docs/ROADMAP.md) — development roadmap and AREDN integration plan
+- [`docs/The XC vs. WA Divide.md`](docs/The%20XC%20vs.%20WA%20Divide.md) — hardware comparison and caldata analysis
 - [`docs/ONCHIP_SCANNER_RADIO_RESEARCH.md`](docs/ONCHIP_SCANNER_RADIO_RESEARCH.md) — QCA9558 WMAC hardware research
 - [`docs/WMAC_CALDATA_RESEARCH_AND_TESTING_PLAN.md`](docs/WMAC_CALDATA_RESEARCH_AND_TESTING_PLAN.md) — caldata accuracy research and testing plan
+- [`docs/WA_AIRVIEW_RUNTIME_PROBE.md`](docs/WA_AIRVIEW_RUNTIME_PROBE.md) — stock Ubiquiti AirView spectral analysis
 - [`docs/TRIAGE_INTERMITTENT_STALL_KJ6DZB_WSB_ACDISH5.md`](docs/TRIAGE_INTERMITTENT_STALL_KJ6DZB_WSB_ACDISH5.md) — r13 stall root-cause analysis
 - [`docs/BUILD_AND_NODE_TEST.md`](docs/BUILD_AND_NODE_TEST.md) — build and test instructions
 - [`artifacts/ipk/BUILD_NOTES.md`](artifacts/ipk/BUILD_NOTES.md) — IPK build history

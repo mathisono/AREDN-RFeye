@@ -42,9 +42,15 @@
 
 ### What's Working (r16)
 
-The AREDN PR #2725 DTS patch enables the QCA9558 on-chip WMAC on XC boards
-(PowerBeam 5AC 500, Rocket 5AC Lite, NanoBeam AC XC) by sharing the existing
-`cal_art_5000` nvmem cell between the ath10k PCI radio and the ath9k WMAC.
+The AREDN PR #2725 DTS patch (now superseded by [PR #2730](https://github.com/aredn/aredn/pull/2730))
+enabled the QCA9558 on-chip WMAC on XC boards (PowerBeam 5AC 500, Rocket 5AC
+Lite) by sharing the existing `cal_art_5000` nvmem cell between the ath10k
+PCI radio and the ath9k WMAC.
+
+**PR #2730 (merged)** takes a cleaner approach: DTS entries enable the WMAC
+with `qca,no-eeprom`, which tells ath9k to load caldata from the filesystem.
+No caldata is shipped with AREDN — the WMAC will not initialize until an app
+(RFeye) installs the appropriate firmware file. See `docs/ROADMAP.md`.
 
 **r16 soak test results:**
 - 5-minute sweep, 24 channels including DFS
@@ -408,11 +414,11 @@ WMAC spectral path works:
 
 | Claim | Status | Notes |
 |-------|--------|-------|
-| PR #2725 enables QCA9558 WMAC on XC boards | ✅ Correct | |
+| PR #2725 enables QCA9558 WMAC on XC boards | ✅ Correct | Superseded by PR #2730 (merged) which uses `qca,no-eeprom` filesystem caldata |
 | Patch uses `cal_art_5000` (not 0x1000) | ✅ Correct | 0x1000 is blank on Gen1 XC boards; 0x5000 has valid AR9300 EEPROM |
 | "Cannot work" — no valid caldata | ⚠️ Partially wrong | The WMAC *functions* with PCI caldata (structurally valid AR9300 EEPROM), but PCI caldata is **not an appropriate WMAC calibration source** — it is calibrated for a different RF chain. See Section 0 safety rules |
 | Template EEPROM fallback | ⚠️ Misleading | The 0x5000 data IS factory-written (unique MAC, board ID). It's not a template — it's caldata for a *different radio on the same board* |
-| "RFeye should not depend on PR #2725" | ❌ Outdated | r16 depends on it and passes soak tests |
+| "RFeye should not depend on PR #2725" | ❌ Outdated | r16 depended on #2725; r17+ targets #2730 (merged) |
 | Proper WMAC caldata is required | ✅ Correct | Not just "would help" — using PCI caldata is a known-bad fallback acceptable only for bench testing. A valid WMAC-calibrated source must be identified before any production use |
 | Spectral scanning ≠ radio communication | ✅ Key insight | FFT hardware works without TX-quality caldata |
 
@@ -462,5 +468,6 @@ WMAC spectral path works:
 - [AR9300 EEPROM structure — iPXE reference](https://dox.ipxe.org/structar9300__eeprom.html)
 - [ART partition caldata — CodeFetch collection](https://github.com/CodeFetch/art-collection)
 - [OpenWrt NanoBeam AC Gen2 XC DTS patch](https://lists.openwrt.org/pipermail/openwrt-devel/2023-March/040697.html)
-- AREDN PR #2725: WMAC DTS enablement for XC boards
+- AREDN PR #2725: WMAC DTS enablement for XC boards (superseded)
+- [AREDN PR #2730](https://github.com/aredn/aredn/pull/2730): WMAC DTS hooks with `qca,no-eeprom` (merged)
 - `docs/ONCHIP_SCANNER_RADIO_RESEARCH.md` — earlier research on the WMAC hardware
