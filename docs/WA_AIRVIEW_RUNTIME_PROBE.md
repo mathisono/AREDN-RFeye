@@ -166,3 +166,61 @@ check for:
 
 If any of these are absent on XC stock firmware, it confirms AirView is a
 WA-only feature.
+
+---
+
+## 6. Decision: Proprietary Flow Is Out of Scope
+
+> **Status:** Accepted as final (2026-05-29)
+
+The `ubntspecd` → `ubnthal` → `ath_spectral` spectral data path is a
+proprietary Ubiquiti implementation that is invisible from the shell and
+uses custom driver APIs with no public documentation.
+
+RFeye on AREDN uses the mainline Linux `ath9k` driver with standard
+`debugfs` spectral scan files. These are two completely independent
+implementations of the same concept (WMAC spectral scanning on QCA9558),
+sharing only the underlying hardware.
+
+**This is accepted as a boundary.** Recovering the proprietary flow and
+reimplementing it as open-source functionality for AREDN and RFeye is a
+valid future project — essentially device-hacking the `ubntspecd` binary
+and `ubnthal` kernel module to understand the data format, ioctl
+interface, and calibration pipeline — but it is out of scope for the
+current RFeye work.
+
+### What a Future Recovery Effort Would Involve
+
+1. **Binary analysis of `/bin/ubntspecd`** — MIPS ELF, ~1.8 KB resident.
+   Likely calls into `ubnthal` via `ioctl()` on a device node or
+   `netlink` socket. Disassemble to find the spectral data read loop
+   and output format.
+
+2. **Kernel module analysis of `ubnthal` (395 KB) and `ath_spectral`
+   (24 KB)** — these are the driver-side spectral engines. Identify
+   the ioctl numbers, data structures, and how caldata is applied to
+   raw FFT magnitudes.
+
+3. **Data format recovery** — capture the spectral data that `ubntspecd`
+   produces (likely written to a shared memory region or socket that
+   the web UI reads via `lighttpd`). Compare with the known ath9k
+   `spectral_scan0` TLV format.
+
+4. **Calibration pipeline** — determine whether `ubntspecd` applies
+   additional gain corrections from the EEPROM caldata beyond what
+   the hardware FFT engine provides. This would answer whether
+   Ubiquiti's AirView readings are more accurate than ath9k's raw
+   spectral output.
+
+5. **Open-source reimplementation** — port the recovered data format
+   and calibration logic into RFeye's parser or a new AREDN-compatible
+   spectral daemon.
+
+### Why It Matters (Eventually)
+
+If Ubiquiti's `ubntspecd` applies factory caldata corrections that
+improve spectral accuracy, understanding that pipeline could inform
+how RFeye should handle caldata on both WA and XC boards — even when
+using the mainline ath9k driver. The caldata at 0x1000 may contain
+correction factors that `ubntspecd` applies in software, which ath9k's
+spectral scan path ignores.
