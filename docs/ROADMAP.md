@@ -109,15 +109,50 @@ The commercial CRFS RFeye platform demonstrates the exact capability
 that AREDN-RFeye will bring to the mesh: **network-attached spectral
 sensing that replaces static RF planning assumptions with live data.**
 
-In a demonstration using a 2.4 GHz directional link over water, a
-static "guessed" noise floor produced a coverage map showing a viable
-link with massive range. When the same model was fed a **live noise
-floor measurement** from a remote RFeye receiver, the actual noise was
--92 dBm instead of the assumed thermal baseline — and the coverage area
-shrunk dramatically, revealing the link was completely unviable in
-practice. Polling the same receiver seconds later showed the noise floor
-fluctuating between -92 dBm and -108 dBm as Wi-Fi bursts raised and
-lowered the background interference in real time.
+#### Reference Demo: "Dynamic noise floor modelling with a CRFS RFeye receiver" (CloudRF)
+
+**The Hardware & Setup:**
+The demo uses a CRFS RFeye receiver — a white hardware box with multiple
+RF ports and a network connection — controlled by a Python API client
+in Visual Studio Code.
+
+**The Baseline Model (Static Guess):**
+The presenter runs an RF coverage calculation using a JSON template with
+a "guessed" static noise floor for a 2.4 GHz directional antenna link
+over water. When exported to Google Earth Pro as a KMZ file, the
+theoretical coverage shows a massive, highly optimistic red-and-yellow
+heatmap with extensive range.
+
+**The Reality Check (Live API Polling):**
+The Python script is then pointed at the networked RFeye receiver to
+pull the **actual live noise floor** of the 2.4 GHz ISM band. The
+measured noise is -92 dBm — significantly higher than the assumed
+thermal baseline. When the KMZ is regenerated with live data and loaded
+into Google Earth, the coverage area **shrinks dramatically**. The link
+that looked great on paper is shown to be completely unviable in reality.
+
+**Dynamic Fluctuations:**
+Running the script repeatedly shows the noise floor constantly shifting:
+-92 dBm, -94 dBm, -108 dBm — fluctuating by **16 dB within moments.**
+
+**Visualizing the FFT Data:**
+Enabling "verbose mode" in the Python client plots the raw FFT data via
+Matplotlib. A live line-graph of the 2.4 GHz spectrum reveals **why** the
+noise floor jumps: sudden Wi-Fi traffic bursts appear as visible spikes
+on the right side of the spectrum plot. As each spike appears, the
+script's calculated noise floor instantly jumps to -103 dBm —
+demonstrating exactly how transient signals ruin background noise and
+kill theoretical coverage.
+
+**The Core Takeaway:**
+Because the RFeye is a **network-attached receiver**, engineers can
+conduct accurate RF modeling using live measured values from a distant
+location without ever sending a technician to take a physical
+measurement. This is the exact capability AREDN-RFeye will unlock: once
+the C daemon is parsing 8-bit TLV payloads from ath9k relayfs and
+computing per-bin dBm, every Rocket 5AC Lite (or any WMAC-equipped
+AREDN node) becomes a network-attached spectral scanner, feeding live
+interference data into modeling tools just like the commercial RFeye.
 
 **This is why AREDN-RFeye exists.** Every AREDN node with a WMAC
 spectral radio becomes a network-attached RF sensor. Once the C daemon
