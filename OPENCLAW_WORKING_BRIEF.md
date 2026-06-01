@@ -37,6 +37,7 @@ r13 complete. WMAC (ath9k) wideband scanner integration in progress.
 - Parser: ath9k type-1 HT20 / type-2 HT40 decoding added and tested
 - Probe: ath9k spectral capability detection added
 - Agent: driver auto-detection (ath10k/ath9k) added
+- **radios.json aligned with upstream PR #2730** (2026-06-01) — wlan0/wlan1 nesting for Rocket 5AC Lite and PowerBeam 5AC 500
 - Next: chanscan wideband sweep pipeline, multi-channel waterfall display
 
 ## Guardrails
@@ -166,6 +167,7 @@ Width: 20 MHz
 ## WMAC (ath9k) radio
 
 Enabled by AREDN PR #2725 device tree patch.
+Upstream PR #2730 adds `radios.json` wlan0/wlan1 nesting and an alternative DTS approach — see compliance notes below.
 
 - phy1 / ath9k / Atheros AR9550 Rev:0
 - No factory caldata — uses ath9k template EEPROM fallback
@@ -176,6 +178,22 @@ Enabled by AREDN PR #2725 device tree patch.
 - debugfs: /sys/kernel/debug/ieee80211/phy1/ath9k/spectral_*
 - TLV format: type 1 (HT20, 56 bins) and type 2 (HT40, 128 bins)
 - Verified on PowerBeam 5AC 500 and Rocket 5AC Lite
+
+## Upstream PR compliance
+
+### PR #2730 — "Provide hooks to enable the spectrum radio on specific Ubiquiti AC radios"
+
+**Status as of 2026-06-01:**
+
+| Area | Status | Notes |
+|------|--------|-------|
+| `radios.json` wlan0/wlan1 nesting | ✅ Aligned | Committed `3e45ed0b` to `mathisono/aredn`, matches PR exactly |
+| DTS patch (wmac enable) | ⚠️ Different approach | Our `758-enable-wmac-spectral-scanner.patch` uses a shared `.dtsi` include with real caldata (`nvmem-cells = <&cal_art_5000>`) instead of inline `&wmac` blocks with `qca,no-eeprom`. Also covers NanoBeam AC XC. Functionally superior — radio initializes fully without app-injected calibration. |
+| `patches/series` | ✅ Present | `758-enable-wmac-spectral-scanner.patch` in same slot |
+
+PR #2730 explicitly states calibration data is left to the app. Our patch wires caldata from ART offset `0x5000` so `phy1` comes up ready for spectral scan immediately.
+
+Comment posted on PR #2730 explaining our position.
 
 ## Local validation commands
 
