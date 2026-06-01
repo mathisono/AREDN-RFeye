@@ -651,71 +651,118 @@ into the relayfs buffer:
 
 ```
 ┌──────────────────────────────────────────────────────┐
-│ FFT Sample TLV Header                                │
-├──────────┬──────────┬────────────────────────────────┤
-│ type (1) │ len (2)  │ payload (variable)             │
-├──────────┴──────────┴────────────────────────────────┤
+│ fft_sample_tlv (3 bytes)                             │
+├──────────┬───────────────────────────────────────────┤
+│ type (1) │ length (2, big-endian)                    │
+├──────────┴───────────────────────────────────────────┤
+│                                                      │
+│  Type values (enum ath_fft_sample_type):              │
+│    1 = ATH_FFT_SAMPLE_HT20      (ath9k, 56 bins)    │
+│    2 = ATH_FFT_SAMPLE_HT20_40   (ath9k, 128 bins)   │
+│    3 = ATH_FFT_SAMPLE_ATH10K    (ath10k, 64/128/256) │
+│    4 = ATH_FFT_SAMPLE_ATH11K    (ath11k, 16–512)     │
 │                                                      │
 │  ┌─────────────────────────────────────────────────┐  │
-│  │ Signature:  0x1756 (magic bytes)                │  │
-│  │ Type:       1 = HT20 (56 bins)                 │  │
-│  │             2 = HT40 (128 bins)                │  │
-│  │             3 = HT40 (64 bins, AR9003+)        │  │
+│  │ Payload Header (type-dependent):               │  │
+│  │   max_exp     — hardware right-shift exponent  │  │
+│  │   freq        — center frequency (MHz, be16)   │  │
+│  │   rssi        — RSSI, control chain 0 (s8)     │  │
+│  │   noise       — noise floor reading (s8, dBm)  │  │
+│  │   max_magnitude — peak FFT bin value (be16)    │  │
+│  │   max_index   — bin index of peak              │  │
+│  │   bitmap_weight — set bits in bitmap           │  │
+│  │   tsf         — 64-bit hardware timestamp      │  │
 │  ├─────────────────────────────────────────────────┤  │
-│  │ Payload Header:                                │  │
-│  │   timestamp    — hardware TSF timestamp        │  │
-│  │   freq         — center frequency of sweep     │  │
-│  │   noise_floor  — hardware NF reading (dBm)     │  │
-│  │   rssi         — combined RSSI                 │  │
-│  │   rssi_ctl[3]  — per-chain control RSSI        │  │
-│  │   rssi_ext[3]  — per-chain extension RSSI      │  │
-│  ├─────────────────────────────────────────────────┤  │
-│  │ bin_pwr[N]:                                    │  │
-│  │   N = 56  for HT20                            │  │
-│  │   N = 128 for HT40                            │  │
+│  │ data[N]:                                       │  │
+│  │   N = 56  for HT20  (type 1)                  │  │
+│  │   N = 128 for HT40  (type 2)                  │  │
 │  │                                                │  │
 │  │   Raw 8-bit unsigned integers (0–255)          │  │
-│  │   representing RF magnitude per subcarrier bin │  │
+│  │   Each value = |I| + |Q| >> max_exp            │  │
+│  │   Must left-shift by max_exp before use        │  │
 │  │   These values are RELATIVE — not absolute dBm │  │
 │  └─────────────────────────────────────────────────┘  │
 └──────────────────────────────────────────────────────┘
 ```
 
-### AR9003+ (QCA955x/QCA956x) FFT Sample Structure
+> **Note:** There is no 0x1756 magic signature in the relayfs TLV stream.
+> The stream is a concatenation of `fft_sample_tlv` headers followed by
+> type-specific payloads. The type byte (1–4) identifies the format.
+> (0x1756 appears in some AR9003 raw PHY error report documentation but
+> is internal to the driver, not present in the userspace-facing relayfs.)
 
-The AR9003 series uses `struct fft_sample_ath9k` (from `spectral_common.h`):
+### ath9k FFT Sample Structures (from `spectral_common.h`)
+
+The ath9k driver uses two struct types for HT20 and HT40 modes:
 
 ```c
 struct fft_sample_tlv {
-    uint8_t  type;        /* FFT_SAMPLE_ATH9K = 3 (AR9003+) */
-    __be16   length;      /* payload length (big-endian) */
+    u8     type;          /* 1=HT20, 2=HT20_40, 3=ATH10K, 4=ATH11K */
+    __be16 length;        /* payload length (big-endian) */
 } __packed;
 
-struct fft_sample_ath9k {
+/* Type 1: ATH_FFT_SAMPLE_HT20 — 56 bins */
+struct fft_sample_ht20 {
     struct fft_sample_tlv tlv;
 
-    uint8_t  max_exp;       /* max exponent for bin scaling */
+    u8     max_exp;       /* hardware right-shift exponent for bins */
 
-    __be16   freq;          /* center frequency (MHz) */
-    int8_t   rssi;          /* combined RSSI */
-    int8_t   noise;         /* noise floor (dBm) */
+    __be16 freq;          /* center frequency (MHz) */
+    s8     rssi;          /* RSSI, control chain 0 */
+    s8     noise;         /* noise floor (dBm) */
 
-    __be16   max_magnitude; /* max FFT magnitude */
-    uint8_t  max_index;     /* bin index of max magnitude */
-    uint8_t  bitmap_weight; /* number of set bits in bitmap */
-    __be64   tsf;           /* 64-bit hardware timestamp */
+    __be16 max_magnitude; /* max FFT magnitude */
+    u8     max_index;     /* bin index of max magnitude */
+    u8     bitmap_weight; /* number of set bits in bitmap */
 
-    uint8_t  data[];        /* FFT bin data (variable length) */
+    __be64 tsf;           /* 64-bit hardware timestamp */
+
+    u8     data[56];      /* FFT bin magnitudes: (|I|+|Q|) >> max_exp */
+} __packed;
+
+/* Type 2: ATH_FFT_SAMPLE_HT20_40 — 128 bins (lower + upper) */
+struct fft_sample_ht20_40 {
+    struct fft_sample_tlv tlv;
+
+    u8     channel_type;  /* NL80211_CHAN_HT40PLUS or HT40MINUS */
+    __be16 freq;          /* primary channel frequency */
+
+    s8     lower_rssi;    /* RSSI for lower 20 MHz half */
+    s8     upper_rssi;    /* RSSI for upper 20 MHz half */
+
+    __be64 tsf;
+
+    s8     lower_noise;   /* noise floor, lower half */
+    s8     upper_noise;   /* noise floor, upper half */
+
+    __be16 lower_max_magnitude;
+    __be16 upper_max_magnitude;
+
+    u8     lower_max_index;
+    u8     upper_max_index;
+
+    u8     lower_bitmap_weight;
+    u8     upper_bitmap_weight;
+
+    u8     max_exp;
+
+    u8     data[128];     /* 64 lower bins + 64 upper bins */
 } __packed;
 ```
 
-### Bin Count by Mode
+> **Source:** `drivers/net/wireless/ath/spectral_common.h` (torvalds/linux)
+> **Reference viewer:** [simonwunderlich/FFT_eval](https://github.com/simonwunderlich/FFT_eval)
 
-| Mode | Bins | Bandwidth | Bin Width | Notes |
-|------|------|-----------|-----------|-------|
-| HT20 | 56 | 20 MHz | ~357 kHz | Standard spectral |
-| HT40 | 128 | 40 MHz | ~312 kHz | Upper + lower |
-| VHT20 | 64 | 20 MHz | ~312 kHz | AR9003+ native |
+### Bin Count by Mode (ath9k)
+
+| Type | Mode | Bins | Bandwidth | Bin Spacing | Notes |
+|------|------|------|-----------|-------------|-------|
+| 1 | HT20 | 56 | 20 MHz | ~344 kHz | 64 subcarriers, middle 56 reported |
+| 2 | HT40 | 128 | 40 MHz | ~312 kHz | 64 lower + 64 upper, separate RSSI/NF per half |
+
+> **ath10k** (type 3) uses 64, 128, or 256 bins depending on channel width.
+> **ath11k** (type 4) uses 16–512 bins. These are different drivers with
+> different struct layouts — not interchangeable with ath9k.
 
 ### Conversion: Raw Bins → Absolute dBm
 
@@ -731,70 +778,141 @@ Where:
 |----------|--------|-------------|
 | $P_i$ | computed | Absolute power in dBm for bin $i$ |
 | NF | `noise` field | Hardware noise floor reading (dBm), e.g. -95 |
-| RSSI | `rssi` field | Combined RSSI from the sample header |
-| $b_i$ | `data[i]` | Raw 8-bit bin magnitude (0–255) |
+| RSSI | `rssi` field | RSSI from **control chain 0** (not combined — per upstream kernel docs) |
+| $b_i$ | `data[i] << max_exp` | Bin magnitude **unscaled by max_exp** (see scaling section below) |
 | BinSum | computed | $10 \log_{10}\left(\sum_{k=0}^{N-1} b_k^2\right)$ — total energy normalization |
+
+> **Critical:** `b_i` must be the **unscaled** value: `data[i] << max_exp`.
+> The raw `data[i]` bytes have been right-shifted by the hardware; you must
+> left-shift them back before computing logarithms. See `max_exp` section below.
+>
+> **For HT40 mode:** Use `lower_rssi`/`lower_noise` for bins 0–63 and
+> `upper_rssi`/`upper_noise` for bins 64–127. Compute `BinSum` separately
+> for each half (as done in FFT_eval's `draw_sample_ht20_40`).
 
 **Step-by-step:**
 
 ```python
 import math
 
-def bins_to_dbm(bins, noise_floor, rssi):
+def bins_to_dbm(raw_bins, max_exp, noise_floor, rssi):
     """
-    Convert raw FFT bin values to absolute dBm.
+    Convert raw FFT bin values to absolute dBm per bin.
+
+    Implements the upstream kernel formula:
+      power(i) = nf + RSSI + 10*log(b(i)^2) - bin_sum
+    which is equivalent to:
+      power(i) = nf + RSSI + 20*log10(b(i)) - bin_sum
+
+    Reference: wireless.docs.kernel.org/en/latest/en/users/drivers/ath9k/spectral_scan.html
+    Verified against: simonwunderlich/FFT_eval fft_eval_sdl.c
 
     Args:
-        bins: list of raw 8-bit bin values (0-255)
-        noise_floor: hardware NF reading (dBm, e.g. -95)
-        rssi: combined RSSI from TLV header
+        raw_bins: list of raw 8-bit bin values from TLV data[] (0-255)
+        max_exp: max_exp field from TLV header (hardware right-shift)
+        noise_floor: noise floor from TLV (dBm, e.g. -95)
+        rssi: RSSI from TLV header (control chain 0 for HT20)
 
     Returns:
         list of per-bin power values in dBm
     """
-    # Total energy normalization
-    bin_sum = 10 * math.log10(sum(b**2 for b in bins if b > 0) or 1)
+    # Step 1: Undo hardware right-shift to recover true magnitudes
+    bins = [b << max_exp for b in raw_bins]
 
+    # Step 2: Total energy normalization
+    #   bin_sum = 10*log10(sum(b(i)^2))
+    sq_sum = sum(b * b for b in bins if b > 0)
+    bin_sum = 10 * math.log10(sq_sum) if sq_sum > 0 else 0
+
+    # Step 3: Per-bin power
+    #   power(i) = nf + RSSI + 20*log10(b(i)) - bin_sum
     result = []
     for b in bins:
         if b > 0:
             p = noise_floor + rssi + 20 * math.log10(b) - bin_sum
         else:
-            p = noise_floor  # Below noise floor
+            p = noise_floor  # Below measurable threshold
         result.append(p)
     return result
 ```
 
-**Example (HT20, 56 bins):**
+**Equivalence proof:** `10·log₁₀(b²) = 10·2·log₁₀(b) = 20·log₁₀(b)` ✓
+
+**Example (HT20, 56 bins, max_exp=0):**
 
 ```
-NF = -95 dBm, RSSI = 30
-Bin 28 (center) = 200, most other bins = 10
+NF = -95 dBm, RSSI = 30, max_exp = 0
+Bin 28 (center) = 200, all other 55 bins = 10
 
-BinSum = 10*log10(200² + 55*10²) = 10*log10(40000 + 5500) = 46.6 dB
+Step 1: bins unchanged (max_exp=0, no shift)
+Step 2: BinSum = 10*log10(200² + 55×10²)
+               = 10*log10(40000 + 5500)
+               = 10*log10(45500)
+               = 46.58 dB
+Step 3:
+  P_28   = -95 + 30 + 20*log10(200) - 46.58
+         = -95 + 30 + 46.02 - 46.58
+         = -65.56 dBm   ← strong signal in center bin
 
-P_28 = -95 + 30 + 20*log10(200) - 46.6
-     = -95 + 30 + 46.0 - 46.6
-     = -65.6 dBm   ← strong signal in center bin
-
-P_other = -95 + 30 + 20*log10(10) - 46.6
-        = -95 + 30 + 20.0 - 46.6
-        = -91.6 dBm  ← near noise floor
+  P_other = -95 + 30 + 20*log10(10) - 46.58
+          = -95 + 30 + 20.00 - 46.58
+          = -91.58 dBm  ← near noise floor
 ```
 
-### AR9003+ `max_exp` Scaling
+**Example with max_exp=2:**
 
-On AR9003+ silicon (QCA955x, QCA956x), the raw bin data may use a
-compressed format where `max_exp` encodes a right-shift applied by the
-hardware. The actual bin magnitude is:
+```
+Same raw data, but max_exp = 2 → actual bins = raw << 2
+Bin 28: 200 << 2 = 800,  others: 10 << 2 = 40
+
+BinSum = 10*log10(800² + 55×40²)
+       = 10*log10(640000 + 88000)
+       = 10*log10(728000)
+       = 58.62 dB
+
+P_28   = -95 + 30 + 20*log10(800) - 58.62
+       = -95 + 30 + 58.06 - 58.62
+       = -65.56 dBm   ← same result! max_exp cancels out
+
+P_other = -95 + 30 + 20*log10(40) - 58.62
+        = -95 + 30 + 32.04 - 58.62
+        = -91.58 dBm  ← same result
+```
+
+> **Insight:** `max_exp` cancels out in the formula because it appears in
+> both the `20·log₁₀(b_i)` term and the `BinSum` term. However, you MUST
+> still apply it before the logarithm to avoid `log₁₀(0)` on bins where
+> hardware truncation set `data[i] = 0` but the true magnitude was nonzero.
+> The FFT_eval reference implementation always applies the shift.
+
+### `max_exp` Scaling (All ath9k Generations)
+
+The FFT hardware right-shifts magnitude values to fit them into 8 bits.
+The `max_exp` field in the TLV header records how many bits were shifted.
+The true magnitude is:
 
 ```
 actual_bin[i] = data[i] << max_exp
 ```
 
-This must be applied **before** the `20*log10(b_i)` calculation.
-The upstream `ath9k` driver handles this in `ath9k_spectral_scan_trigger()`
-and the relayfs output already includes the `max_exp` field.
+From the upstream kernel frame format documentation, each raw bin value is:
+```
+(|I| + |Q|) >> max_exp
+```
+
+Where `|I| + |Q|` is the absolute magnitude of the complex FFT output.
+
+**This applies to ALL ath9k sample types** (HT20 type 1 and HT40 type 2),
+not just AR9003+. The `max_exp` field is present in both `fft_sample_ht20`
+and `fft_sample_ht20_40` structs.
+
+As shown in the examples above, `max_exp` mathematically cancels in the
+power formula, but the shift must still be applied before `log₁₀()` to
+avoid log(0) on hardware-truncated bins.
+
+**Reference:** FFT_eval `draw_sample_ht20()` always does
+`data = result->sample.ht20.data[i] << result->sample.ht20.max_exp`
+before calling `plot_datapoint()`.
 
 ### Impact of Caldata on Spectral Readings
 
