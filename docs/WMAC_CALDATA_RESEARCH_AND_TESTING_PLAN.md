@@ -1,6 +1,6 @@
 # WMAC Caldata Research & Testing Plan
 
-> **Date:** 2026-05-27 (updated 2026-05-29)  
+> **Date:** 2026-05-27 (updated 2026-05-31)  
 > **Status:** DRAFT — for review before push  
 > **Context:** r16 WMAC spectral scanning works with shared PCI caldata,  
 > but the shared PCI caldata is **not an appropriate WMAC calibration  
@@ -364,6 +364,180 @@ echo disable > /sys/kernel/debug/ieee80211/phy1/ath9k/spectral_scan_ctl
 # If readings are consistently 10+ dB off, caldata is the likely cause
 ```
 
+### Phase 1b: Hardware Register & Driver Diagnostics
+
+**Goal:** Capture the exact hardware-level spectral engine configuration
+and driver interactions that stock AirOS (ubnthal) and Linux ath9k use,
+to detect proprietary register modifications or non-standard FFT behavior.
+
+| Test | Method | What It Tells Us |
+|------|--------|------------------|
+| **T11: AR_PHY_SPECTRAL_SCAN register snapshot** | `devmem` or `debugfs/regidx` to read register `0x9910` before and after airviewd starts | Whether ubnthal writes proprietary bits to the spectral MAC register to alter FFT reporting interval or bypass standard behavior |
+| **T12: LD_PRELOAD ioctl hook** | Compile a tiny C shim that hooks `ioctl()` via `LD_PRELOAD`, logs ubnthal ioctl commands to a `/dev/shm` ring buffer | Exact ioctl structs passed to ubnthal without strace overhead or frame drops |
+
+#### T11: Hardware Register Snapshot (AR_PHY_SPECTRAL_SCAN — 0x9910)
+
+The ath9k spectral engine is driven by the physical `AR_PHY_SPECTRAL_SCAN`
+MAC register at offset **`0x9910`** on AR9003+ silicon (QCA955x, QCA956x).
+If Ubiquiti's `ubnthal` kernel driver writes proprietary bits to this register
+to alter FFT behavior, `strace` won't catch it because it happens in kernel
+space. This test captures the register directly.
+
+**Register bit fields (AR9003+ / AR9550):**
+
+| Bits | Field | Description |
+|------|-------|-------------|
+| 0 | `SPECTRAL_SCAN_ENA` | Enable spectral scan |
+| 1 | `SPECTRAL_SCAN_ACTIVE` | Scan is actively running |
+| 7:2 | `SPECTRAL_SCAN_COUNT` | Number of reports to generate (0 = continuous) |
+| 8 | `SPECTRAL_SCAN_SHORT_RPT` | Short report mode |
+| 17:9 | `SPECTRAL_SCAN_PERIOD` | Period between successive scans (clocks) |
+| 25:18 | `SPECTRAL_SCAN_FFT_PERIOD` | FFT period (resolution/speed tradeoff) |
+| 28:26 | `SPECTRAL_SCAN_PRIORITY` | Priority vs normal traffic |
+| 29 | `SPECTRAL_SCAN_GC_ENA` | Gain change enable |
+| 30 | `SPECTRAL_SCAN_RESTART_ENA` | Auto-restart on gain change |
+| 31 | `SPECTRAL_SCAN_NB_TONE_THR` | Narrowband tone detection threshold |
+
+**Procedure:**
+
+```bash
+# --- On stock AirOS (via SSH) ---
+
+# WMAC AHB base address is 0x18100000 (physical)
+# AR_PHY_SPECTRAL_SCAN = base + 0x9910
+WMAC_BASE=0x18100000
+SPECTRAL_REG=$((WMAC_BASE + 0x9910))
+
+# 1. Snapshot BEFORE airviewd is running
+echo "=== BEFORE airviewd ==="
+devmem $SPECTRAL_REG 2>/dev/null || echo "devmem not available"
+
+# Alternative: read via debugfs regidx if available
+if [ -f /sys/kernel/debug/ieee80211/phy*/ath9k/regidx ]; then
+  echo 0x9910 > /sys/kernel/debug/ieee80211/phy*/ath9k/regidx
+  cat /sys/kernel/debug/ieee80211/phy*/ath9k/regval
+fi
+
+# 2. Start airviewd (AirView spectral daemon)
+# On stock AirOS, airviewd may auto-start or can be triggered from the UI
+# If it's already running:
+pidof airviewd && echo "airviewd running" || echo "airviewd not running"
+
+# 3. Snapshot AFTER airviewd is active
+echo "=== AFTER airviewd ==="
+devmem $SPECTRAL_REG 2>/dev/null || echo "devmem not available"
+
+# 4. Decode the register value
+# Example: if devmem returns 0x00012801
+#   bit 0 = 1 → spectral scan enabled
+#   bits 7:2 = 0 → continuous mode
+#   bits 17:9 = 0x94 → scan period 148 clocks
+#   bits 25:18 = 0x00 → FFT period 0 (fastest)
+```
+
+**What to look for:**
+- Are the `SPECTRAL_SCAN_COUNT`, `SPECTRAL_SCAN_PERIOD`, or `SPECTRAL_SCAN_FFT_PERIOD`
+  fields set to non-standard values that wouldn't match Linux ath9k defaults?
+- Is `SPECTRAL_SCAN_SHORT_RPT` enabled (bit 8)? If so, the TLV reports may
+  be truncated compared to standard ath9k output.
+- Are any reserved/undocumented bits set? These could indicate proprietary
+  ubnthal extensions.
+
+#### T12: LD_PRELOAD ioctl Hook (Optional — High Fidelity)
+
+`strace` has overhead that can skew strict kernel timing, especially when
+polling thousands of high-speed FFT frames per second. If ioctl payloads
+look truncated or misaligned in other diagnostics, a tiny C shim that hooks
+`ioctl()` via `LD_PRELOAD` and logs specifically ubnthal commands to a
+`/dev/shm` ring buffer is the cleanest way to read the exact structs without
+dropping frames.
+
+**C shim source (`ioctl_hook.c`):**
+
+```c
+#define _GNU_SOURCE
+#include <dlfcn.h>
+#include <stdarg.h>
+#include <stdio.h>
+#include <fcntl.h>
+#include <unistd.h>
+#include <sys/ioctl.h>
+#include <string.h>
+#include <time.h>
+
+/* Ring buffer in shared memory for zero-copy logging */
+#define RING_PATH "/dev/shm/ioctl_ring.bin"
+#define RING_SIZE (4 * 1024 * 1024)  /* 4 MB ring */
+#define ENTRY_MAX 256
+
+static int ring_fd = -1;
+static char *ring_buf = NULL;
+static volatile size_t ring_pos = 0;
+
+typedef int (*real_ioctl_t)(int fd, unsigned long request, ...);
+static real_ioctl_t real_ioctl = NULL;
+
+__attribute__((constructor))
+static void init(void) {
+    real_ioctl = (real_ioctl_t)dlsym(RTLD_NEXT, "ioctl");
+    ring_fd = open(RING_PATH, O_CREAT | O_RDWR, 0644);
+    if (ring_fd >= 0) {
+        ftruncate(ring_fd, RING_SIZE);
+        ring_buf = mmap(NULL, RING_SIZE, PROT_WRITE, MAP_SHARED, ring_fd, 0);
+    }
+}
+
+static void log_entry(int fd, unsigned long req, void *arg, int ret) {
+    if (!ring_buf) return;
+    struct timespec ts;
+    clock_gettime(CLOCK_MONOTONIC, &ts);
+
+    char entry[ENTRY_MAX];
+    int n = snprintf(entry, ENTRY_MAX,
+        "%ld.%09ld fd=%d req=0x%lx arg=%p ret=%d\n",
+        ts.tv_sec, ts.tv_nsec, fd, req, arg, ret);
+    if (n <= 0 || n >= ENTRY_MAX) return;
+
+    size_t pos = __sync_fetch_and_add(&ring_pos, n) % RING_SIZE;
+    memcpy(ring_buf + pos, entry, n);
+}
+
+int ioctl(int fd, unsigned long request, ...) {
+    va_list ap;
+    va_start(ap, request);
+    void *arg = va_arg(ap, void *);
+    va_end(ap);
+
+    int ret = real_ioctl(fd, request, arg);
+    log_entry(fd, request, arg, ret);
+    return ret;
+}
+```
+
+**Build (cross-compile for MIPS or build on-device if toolchain available):**
+
+```bash
+# Cross-compile for MIPS (from build host)
+mips-openwrt-linux-musl-gcc -shared -fPIC -o ioctl_hook.so ioctl_hook.c -ldl
+
+# Deploy to target
+scp ioctl_hook.so root@<node>:/tmp/
+
+# Run airviewd with the hook
+LD_PRELOAD=/tmp/ioctl_hook.so airviewd &
+
+# Read captured ioctls
+hexdump -C /dev/shm/ioctl_ring.bin | head -100
+```
+
+**What to look for:**
+- ioctl request codes used by airviewd to communicate with ubnthal
+- Frequency of ioctl calls (correlated with FFT frame rate)
+- Any proprietary struct payloads that configure spectral behavior
+  outside the standard `AR_PHY_SPECTRAL_SCAN` register
+
+---
+
 ### Phase 2: Runtime Correction (Software Only)
 
 **Goal:** Improve accuracy without touching flash or caldata.
@@ -462,7 +636,187 @@ WMAC spectral path works:
 
 ---
 
-## 8. References
+## 8. Spectral Data Format Reference
+
+### TLV Binary Stream Structure
+
+The spectral data flowing out of the ath9k relayfs endpoint
+(`/sys/kernel/debug/ieee80211/phy1/ath9k/spectral_scan0`) is **not raw
+ASCII or CSV text**. It is a highly optimized, concatenated stream of
+binary **TLV (Type-Length-Value)** structures defined in the upstream
+Linux kernel (`drivers/net/wireless/ath/spectral_common.h`).
+
+Every time the hardware finishes one FFT sweep, it pushes one TLV struct
+into the relayfs buffer:
+
+```
+┌──────────────────────────────────────────────────────┐
+│ FFT Sample TLV Header                                │
+├──────────┬──────────┬────────────────────────────────┤
+│ type (1) │ len (2)  │ payload (variable)             │
+├──────────┴──────────┴────────────────────────────────┤
+│                                                      │
+│  ┌─────────────────────────────────────────────────┐  │
+│  │ Signature:  0x1756 (magic bytes)                │  │
+│  │ Type:       1 = HT20 (56 bins)                 │  │
+│  │             2 = HT40 (128 bins)                │  │
+│  │             3 = HT40 (64 bins, AR9003+)        │  │
+│  ├─────────────────────────────────────────────────┤  │
+│  │ Payload Header:                                │  │
+│  │   timestamp    — hardware TSF timestamp        │  │
+│  │   freq         — center frequency of sweep     │  │
+│  │   noise_floor  — hardware NF reading (dBm)     │  │
+│  │   rssi         — combined RSSI                 │  │
+│  │   rssi_ctl[3]  — per-chain control RSSI        │  │
+│  │   rssi_ext[3]  — per-chain extension RSSI      │  │
+│  ├─────────────────────────────────────────────────┤  │
+│  │ bin_pwr[N]:                                    │  │
+│  │   N = 56  for HT20                            │  │
+│  │   N = 128 for HT40                            │  │
+│  │                                                │  │
+│  │   Raw 8-bit unsigned integers (0–255)          │  │
+│  │   representing RF magnitude per subcarrier bin │  │
+│  │   These values are RELATIVE — not absolute dBm │  │
+│  └─────────────────────────────────────────────────┘  │
+└──────────────────────────────────────────────────────┘
+```
+
+### AR9003+ (QCA955x/QCA956x) FFT Sample Structure
+
+The AR9003 series uses `struct fft_sample_ath9k` (from `spectral_common.h`):
+
+```c
+struct fft_sample_tlv {
+    uint8_t  type;        /* FFT_SAMPLE_ATH9K = 3 (AR9003+) */
+    __be16   length;      /* payload length (big-endian) */
+} __packed;
+
+struct fft_sample_ath9k {
+    struct fft_sample_tlv tlv;
+
+    uint8_t  max_exp;       /* max exponent for bin scaling */
+
+    __be16   freq;          /* center frequency (MHz) */
+    int8_t   rssi;          /* combined RSSI */
+    int8_t   noise;         /* noise floor (dBm) */
+
+    __be16   max_magnitude; /* max FFT magnitude */
+    uint8_t  max_index;     /* bin index of max magnitude */
+    uint8_t  bitmap_weight; /* number of set bits in bitmap */
+    __be64   tsf;           /* 64-bit hardware timestamp */
+
+    uint8_t  data[];        /* FFT bin data (variable length) */
+} __packed;
+```
+
+### Bin Count by Mode
+
+| Mode | Bins | Bandwidth | Bin Width | Notes |
+|------|------|-----------|-----------|-------|
+| HT20 | 56 | 20 MHz | ~357 kHz | Standard spectral |
+| HT40 | 128 | 40 MHz | ~312 kHz | Upper + lower |
+| VHT20 | 64 | 20 MHz | ~312 kHz | AR9003+ native |
+
+### Conversion: Raw Bins → Absolute dBm
+
+The raw `bin_pwr` values are strictly **relative** — they represent the
+magnitude of each subcarrier's FFT output as an 8-bit unsigned integer.
+To convert to absolute dBm power per bin:
+
+$$P_i = \text{NF} + \text{RSSI} + 20 \log_{10}(b_i) - \text{BinSum}$$
+
+Where:
+
+| Variable | Source | Description |
+|----------|--------|-------------|
+| $P_i$ | computed | Absolute power in dBm for bin $i$ |
+| NF | `noise` field | Hardware noise floor reading (dBm), e.g. -95 |
+| RSSI | `rssi` field | Combined RSSI from the sample header |
+| $b_i$ | `data[i]` | Raw 8-bit bin magnitude (0–255) |
+| BinSum | computed | $10 \log_{10}\left(\sum_{k=0}^{N-1} b_k^2\right)$ — total energy normalization |
+
+**Step-by-step:**
+
+```python
+import math
+
+def bins_to_dbm(bins, noise_floor, rssi):
+    """
+    Convert raw FFT bin values to absolute dBm.
+
+    Args:
+        bins: list of raw 8-bit bin values (0-255)
+        noise_floor: hardware NF reading (dBm, e.g. -95)
+        rssi: combined RSSI from TLV header
+
+    Returns:
+        list of per-bin power values in dBm
+    """
+    # Total energy normalization
+    bin_sum = 10 * math.log10(sum(b**2 for b in bins if b > 0) or 1)
+
+    result = []
+    for b in bins:
+        if b > 0:
+            p = noise_floor + rssi + 20 * math.log10(b) - bin_sum
+        else:
+            p = noise_floor  # Below noise floor
+        result.append(p)
+    return result
+```
+
+**Example (HT20, 56 bins):**
+
+```
+NF = -95 dBm, RSSI = 30
+Bin 28 (center) = 200, most other bins = 10
+
+BinSum = 10*log10(200² + 55*10²) = 10*log10(40000 + 5500) = 46.6 dB
+
+P_28 = -95 + 30 + 20*log10(200) - 46.6
+     = -95 + 30 + 46.0 - 46.6
+     = -65.6 dBm   ← strong signal in center bin
+
+P_other = -95 + 30 + 20*log10(10) - 46.6
+        = -95 + 30 + 20.0 - 46.6
+        = -91.6 dBm  ← near noise floor
+```
+
+### AR9003+ `max_exp` Scaling
+
+On AR9003+ silicon (QCA955x, QCA956x), the raw bin data may use a
+compressed format where `max_exp` encodes a right-shift applied by the
+hardware. The actual bin magnitude is:
+
+```
+actual_bin[i] = data[i] << max_exp
+```
+
+This must be applied **before** the `20*log10(b_i)` calculation.
+The upstream `ath9k` driver handles this in `ath9k_spectral_scan_trigger()`
+and the relayfs output already includes the `max_exp` field.
+
+### Impact of Caldata on Spectral Readings
+
+The caldata affects spectral accuracy through these fields:
+
+| EEPROM Field | Effect on Spectral |
+|-------------|--------------------|
+| `noiseFloorThreshCh[]` | Bounds the NF calibration range — wrong values shift all readings |
+| `calPierData5G[]` | Per-frequency gain corrections — wrong values cause frequency-dependent tilt |
+| `rxGainType` | LNA gain table selection — wrong table shifts RSSI |
+| `tempSlope` | Temperature compensation — wrong baseline causes drift |
+| `antennaGain` | Antenna gain offset — shifts all absolute readings by a fixed dB |
+
+With PCI caldata on the WMAC, the NF and gain corrections are calibrated
+for the wrong RF path, causing systematic offsets. The `20*log10(b_i)`
+and `BinSum` terms are computed from the actual FFT hardware output and
+are **independent of caldata** — only the NF and RSSI header values are
+affected.
+
+---
+
+## 9. References
 
 - [ath9k spectral scan — Linux Wireless docs](https://wireless.docs.kernel.org/en/latest/en/users/drivers/ath9k/spectral_scan.html)
 - [AR9300 EEPROM structure — iPXE reference](https://dox.ipxe.org/structar9300__eeprom.html)
