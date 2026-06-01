@@ -17,189 +17,35 @@ cat <<'HTML'
   <link rel="stylesheet" href="/a/css/mobile.css">
   <style>
     :root {
-      --bg: #070b11;
-      --card: rgba(127,127,127,.08);
-      --edge: rgba(127,127,127,.35);
-      --text: #d8e2ee;
-      --muted: #97a4b4;
-      --accent: #22d3ee;
-      --ok: #22c55e;
-      --bad: #ef4444;
+      --bg:#070b11; --card:rgba(127,127,127,.08); --edge:rgba(127,127,127,.35);
+      --text:#d8e2ee; --muted:#97a4b4; --accent:#22d3ee; --ok:#22c55e;
+      --bad:#ef4444; --warn:#f59e0b;
     }
-    html, body { min-height: 100%; overflow-y: auto; }
-    body {
-      margin: 0;
-      color: var(--text);
-      font-family: system-ui, sans-serif;
-      line-height: 1.35;
-      padding: .75rem;
-    }
-    .rfeye-wrap {
-      max-width: 1200px;
-      margin: 0 auto;
-      padding-bottom: 1rem;
-    }
-    h1, h2, h3 { margin: 0 0 .45rem; }
-    h1 { font-size: 1.25rem; }
-    h2 { font-size: 1.05rem; }
-    h3 { font-size: .98rem; }
-    p { margin: .35rem 0 .5rem; }
-
-    .rfeye-grid {
-      display: grid;
-      grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
-      gap: .65rem;
-      margin: .65rem 0;
-    }
-    .rfeye-panel {
-      border: 1px solid var(--edge);
-      border-radius: .55rem;
-      background: var(--card);
-      padding: .6rem;
-      overflow: visible;
-    }
-
-    .safety {
-      border-left: .3rem solid #f59e0b;
-      margin-bottom: .65rem;
-    }
-
-    .compact-grid {
-      display: grid;
-      grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
-      gap: .4rem .65rem;
-      align-items: end;
-    }
-
-    .row {
-      display: flex;
-      flex-wrap: wrap;
-      gap: .4rem;
-      align-items: center;
-      margin-top: .45rem;
-    }
-
-    label {
-      display: grid;
-      gap: .2rem;
-      font-size: .85rem;
-      color: var(--muted);
-    }
-
-    input, select, button {
-      font: inherit;
-      padding: .3rem .45rem;
-      border-radius: .35rem;
-      border: 1px solid var(--edge);
-      background: rgba(0,0,0,.18);
-      color: var(--text);
-      min-height: 2rem;
-    }
-
-    button { cursor: pointer; }
-    button:hover { border-color: var(--accent); }
-
-    .metrics {
-      display: grid;
-      grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
-      gap: .35rem .65rem;
-      font-size: .85rem;
-    }
-
-    .badge {
-      display: inline-block;
-      padding: .08rem .38rem;
-      border-radius: .7rem;
-      border: 1px solid var(--edge);
-      font-weight: 700;
-      font-size: .78rem;
-      margin-left: .25rem;
-      color: var(--muted);
-    }
-
-    .ok { color: var(--ok); }
-    .bad { color: var(--bad); }
-    .muted { color: var(--muted); }
-
-    .panel-head {
-      display: flex;
-      flex-wrap: wrap;
-      justify-content: space-between;
-      gap: .45rem;
-      align-items: center;
-      margin-bottom: .35rem;
-    }
-
-    .canvas-wrap {
-      position: relative;
-      width: 100%;
-      border: 1px solid var(--edge);
-      border-radius: .45rem;
-      background: var(--bg);
-      overflow: hidden;
-    }
-
-    .canvas-wrap canvas {
-      width: 100%;
-      display: block;
-      image-rendering: auto;
-    }
-
-    #waveform-wrap canvas { height: 260px; }
-    #waterfall-wrap canvas { height: 300px; }
-    #ambient-wrap canvas { height: 220px; }
-
-    .legend {
-      margin-top: .3rem;
-      display: grid;
-      gap: .25rem;
-    }
-    .legend-bar {
-      height: .68rem;
-      border-radius: .34rem;
-      border: 1px solid var(--edge);
-      background: linear-gradient(
-        to right,
-        #00030a 0%,
-        #042a83 20%,
-        #1f6bff 40%,
-        #22c55e 60%,
-        #f59e0b 75%,
-        #ef4444 90%,
-        #f8fafc 100%
-      );
-    }
-    .legend-labels {
-      display: flex;
-      justify-content: space-between;
-      font-size: .75rem;
-      color: var(--muted);
-    }
-
-    details {
-      margin-top: .35rem;
-    }
-    summary { cursor: pointer; }
-
-    pre {
-      margin: .35rem 0 0;
-      padding: .45rem;
-      border-radius: .35rem;
-      background: rgba(0,0,0,.2);
-      max-height: 18rem;
-      overflow: auto;
-      font-size: .75rem;
-      white-space: pre-wrap;
-      word-break: break-word;
-    }
-
-    .small-note { font-size: .78rem; color: var(--muted); }
-
-    @media (max-width: 900px) {
-      #waveform-wrap canvas { height: 220px; }
-      #waterfall-wrap canvas { height: 240px; }
-      #ambient-wrap canvas { height: 190px; }
-    }
+    html, body { min-height:100%; overflow-y:auto; }
+    body { margin:0; color:var(--text); font-family:system-ui,sans-serif; line-height:1.35; padding:.75rem; }
+    .rfeye-wrap { max-width:1200px; margin:0 auto; padding-bottom:1rem; }
+    h1,h2,h3 { margin:0 0 .45rem; } h1 { font-size:1.25rem; } h2 { font-size:1.05rem; }
+    p { margin:.35rem 0 .5rem; }
+    .rfeye-grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(260px,1fr)); gap:.65rem; margin:.65rem 0; }
+    .rfeye-panel { border:1px solid var(--edge); border-radius:.55rem; background:var(--card); padding:.6rem; overflow:visible; }
+    .panel-head { display:flex; flex-wrap:wrap; justify-content:space-between; gap:.45rem; align-items:center; margin-bottom:.35rem; }
+    .row { display:flex; flex-wrap:wrap; gap:.4rem; align-items:center; margin-top:.45rem; }
+    label { display:grid; gap:.2rem; font-size:.85rem; color:var(--muted); }
+    input, select, button { font:inherit; padding:.3rem .45rem; border-radius:.35rem; border:1px solid var(--edge); background:rgba(0,0,0,.18); color:var(--text); min-height:2rem; }
+    button { cursor:pointer; } button:hover { border-color:var(--accent); }
+    .metrics { display:grid; grid-template-columns:repeat(auto-fit,minmax(120px,1fr)); gap:.35rem .65rem; font-size:.85rem; }
+    .badge { display:inline-block; padding:.08rem .38rem; border-radius:.7rem; border:1px solid var(--edge); font-weight:700; font-size:.78rem; margin-left:.25rem; color:var(--muted); }
+    .ok { color:var(--ok); } .bad { color:var(--bad); } .warn { color:var(--warn); } .muted { color:var(--muted); }
+    .canvas-wrap { position:relative; width:100%; border:1px solid var(--edge); border-radius:.45rem; background:var(--bg); overflow:hidden; }
+    .canvas-wrap canvas { width:100%; display:block; image-rendering:auto; }
+    #waveform-wrap canvas { height:260px; } #waterfall-wrap canvas { height:300px; } #ambient-wrap canvas { height:220px; }
+    .legend { margin-top:.3rem; display:grid; gap:.25rem; }
+    .legend-bar { height:.68rem; border-radius:.34rem; border:1px solid var(--edge); background:linear-gradient(to right,#00030a 0%,#042a83 20%,#1f6bff 40%,#22c55e 60%,#f59e0b 75%,#ef4444 90%,#f8fafc 100%); }
+    .legend-labels { display:flex; justify-content:space-between; font-size:.75rem; color:var(--muted); }
+    details { margin-top:.35rem; } summary { cursor:pointer; }
+    pre { margin:.35rem 0 0; padding:.45rem; border-radius:.35rem; background:rgba(0,0,0,.2); max-height:18rem; overflow:auto; font-size:.75rem; white-space:pre-wrap; word-break:break-word; }
+    .small-note { font-size:.78rem; color:var(--muted); }
+    @media (max-width:900px) { #waveform-wrap canvas{height:220px;} #waterfall-wrap canvas{height:240px;} #ambient-wrap canvas{height:190px;} }
   </style>
 </head>
 <body>
@@ -229,11 +75,12 @@ cat <<'HTML'
         <button id="start">Start</button>
         <button id="stop">Stop</button>
         <button id="reset">Reset</button>
+        <button id="mock">Mock stream</button>
       </div>
     </div>
 
     <div class="rfeye-panel" style="grid-column:1/-1">
-      <div class="panel-head"><h2>Radio &amp; Status</h2><span id="liveStatus" class="badge">waiting</span></div>
+      <div class="panel-head"><h2>Radio &amp; Status</h2><span id="liveStatus" class="badge">offline</span></div>
       <div class="metrics">
         <div>Channel: <b id="rchan">--</b></div>
         <div>Frequency: <b id="rfreq">--</b></div>
@@ -245,17 +92,14 @@ cat <<'HTML'
         <div>Elapsed: <b id="elapsed">0s / 0s</b></div>
         <div>Storage: <b id="storage">0</b></div>
       </div>
-      <details>
-        <summary>Raw JSON</summary>
-        <pre id="raw">Waiting for data...</pre>
-      </details>
+      <details><summary>Raw JSON</summary><pre id="raw">Waiting for data...</pre></details>
     </div>
   </div>
 
   <div class="rfeye-panel">
     <div class="panel-head"><h2>Display scaling</h2><span class="small-note">Relative power only</span></div>
     <div class="row">
-      <label><input type="checkbox" id="autoScale" checked> Auto scale (5th/95th percentile)</label>
+      <label><input type="checkbox" id="autoScale" checked> Auto scale (5th/95th percentile, throttled)</label>
       <label>Min dBm <input id="minDbm" type="number" value="-120" step="1"></label>
       <label>Max dBm <input id="maxDbm" type="number" value="-60" step="1"></label>
       <button id="resetScale">Reset scale</button>
@@ -264,30 +108,18 @@ cat <<'HTML'
   </div>
 
   <div class="rfeye-panel">
-    <div class="panel-head">
-      <h2>Waveform (spectrum trace)</h2>
-      <span class="small-note" id="waveNote">No data yet</span>
-    </div>
+    <div class="panel-head"><h2>Waveform (spectrum trace)</h2><span class="small-note" id="waveNote">No data yet</span></div>
     <div class="canvas-wrap" id="waveform-wrap"><canvas id="waveform" height="260"></canvas></div>
   </div>
 
   <div class="rfeye-panel" style="margin-top:.65rem">
-    <div class="panel-head">
-      <h2>Waterfall (time history)</h2>
-      <span class="small-note" id="wfNote">Newest row at bottom</span>
-    </div>
+    <div class="panel-head"><h2>Waterfall (time history)</h2><span class="small-note" id="wfNote">Newest row at bottom</span></div>
     <div class="canvas-wrap" id="waterfall-wrap"><canvas id="waterfall" height="300"></canvas></div>
-    <div class="legend">
-      <div class="legend-bar"></div>
-      <div class="legend-labels"><span id="legendMin">-120 dBm</span><span id="legendMid">mid</span><span id="legendMax">-60 dBm</span></div>
-    </div>
+    <div class="legend"><div class="legend-bar"></div><div class="legend-labels"><span id="legendMin">-120 dBm</span><span id="legendMid">mid</span><span id="legendMax">-60 dBm</span></div></div>
   </div>
 
   <div class="rfeye-panel" style="margin-top:.65rem">
-    <div class="panel-head">
-      <h2>Ambient / slower noise history</h2>
-      <span class="small-note" id="ambientNote">minute-peak with current in-progress row</span>
-    </div>
+    <div class="panel-head"><h2>Ambient / slower noise history</h2><span class="small-note" id="ambientNote">minute-peak with current in-progress row</span></div>
     <div class="canvas-wrap" id="ambient-wrap"><canvas id="ambient" height="220"></canvas></div>
   </div>
 </div>
@@ -296,35 +128,51 @@ cat <<'HTML'
 (function () {
   const api = '/cgi-bin/apps/rfeye/data/agent.sh';
   const POLL_MS = 1500;
+  const WS_PORT = 8080;
+  const WS_PATH = '/rfeye';
+  const MAX_WATERFALL_ROWS = 300;
+  const MAX_AMBIENT_ROWS = 60;
+  const SCALE_THROTTLE_MS = 500;
   const DEFAULT_SCALE = { min: -120, max: -60 };
   const MIN_SPAN = 20;
   const GRID_MHZ = 5;
   const BANDS = {
     current: { label: 'Current Channel', low: 0, high: 0 },
-    '2ghz':  { label: '2.4 GHz', low: 2400, high: 2484 },
-    '5ghz':  { label: '5 GHz All', low: 5100, high: 5900 },
-    unii1:   { label: 'UNII-1', low: 5150, high: 5250 },
-    dfs:     { label: 'DFS', low: 5250, high: 5725 },
-    unii3:   { label: 'UNII-3', low: 5725, high: 5850 }
+    '2ghz': { label: '2.4 GHz', low: 2400, high: 2484 },
+    '5ghz': { label: '5 GHz All', low: 5100, high: 5900 },
+    unii1: { label: 'UNII-1', low: 5150, high: 5250 },
+    dfs: { label: 'DFS', low: 5250, high: 5725 },
+    unii3: { label: 'UNII-3', low: 5725, high: 5850 }
   };
+
   const raw = document.getElementById('raw');
   const waveCanvas = document.getElementById('waveform');
   const waterfallCanvas = document.getElementById('waterfall');
   const ambientCanvas = document.getElementById('ambient');
 
+  let ws = null;
+  let pollInterval = null;
   let pollBusy = false;
+  let mockInterval = null;
+  let streamState = 'offline'; // ws_live | polling | mock | offline
   let backendScale = { min: DEFAULT_SCALE.min, max: DEFAULT_SCALE.max };
+  let cachedScale = { min: DEFAULT_SCALE.min, max: DEFAULT_SCALE.max, source: 'default' };
+  let lastScaleAt = 0;
   let latestBundle = null;
+  let liveRows = [];
+  let ambientRows = [];
+  let ambientPending = null;
+  let liveFrameCount = 0;
+  let lastFrameAt = 0;
+  let fpsWindow = [];
 
   function q(id) { return document.getElementById(id); }
-
   function qs(action) {
     const phy = encodeURIComponent(q('phy').value || 'phy0');
     const bins = encodeURIComponent(q('bins').value || '128');
     const seconds = encodeURIComponent(q('seconds').value || '10');
     return `${api}?action=${action}&phy=${phy}&bins=${bins}&seconds=${seconds}`;
   }
-
   async function getJson(url) {
     const r = await fetch(url, { cache: 'no-store' });
     const t = await r.text();
@@ -332,15 +180,59 @@ cat <<'HTML'
     catch (e) { return { ok: false, error: 'invalid json', body: t }; }
   }
 
+  function setStreamState(state) {
+    streamState = state;
+    const el = q('liveStatus');
+    const text = state === 'ws_live' ? 'ws live' : state;
+    el.textContent = text;
+    el.className = 'badge ' + (state === 'ws_live' || state === 'mock' ? 'ok' : (state === 'polling' ? 'warn' : 'muted'));
+  }
+
+  function wsUrl() {
+    const scheme = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+    return `${scheme}//${window.location.hostname}:${WS_PORT}${WS_PATH}`;
+  }
+
+  function connectDataStream() {
+    stopMockDaemon();
+    if (ws) { try { ws.close(); } catch (e) {} ws = null; }
+    setStreamState('offline');
+    try {
+      ws = new WebSocket(wsUrl());
+    } catch (e) {
+      startPollingFallback();
+      return;
+    }
+
+    ws.onopen = () => {
+      setStreamState('ws_live');
+      if (pollInterval) { clearInterval(pollInterval); pollInterval = null; }
+    };
+    ws.onmessage = (event) => {
+      try { normalizeAndRender(JSON.parse(event.data)); }
+      catch (e) { raw.textContent = JSON.stringify({ ok:false, error:'bad websocket json', detail:String(e) }, null, 2); }
+    };
+    ws.onerror = () => startPollingFallback();
+    ws.onclose = () => {
+      if (streamState === 'ws_live' || streamState === 'offline') startPollingFallback();
+    };
+  }
+
+  function startPollingFallback() {
+    if (mockInterval) return;
+    setStreamState('polling');
+    if (!pollInterval) {
+      pollInterval = setInterval(pollBundle, POLL_MS);
+      pollBundle();
+    }
+  }
+
   function setCanvasResolution(canvas) {
     const ratio = window.devicePixelRatio || 1;
     const rect = canvas.getBoundingClientRect();
     const w = Math.max(1, Math.round(rect.width * ratio));
     const h = Math.max(1, Math.round(rect.height * ratio));
-    if (canvas.width !== w || canvas.height !== h) {
-      canvas.width = w;
-      canvas.height = h;
-    }
+    if (canvas.width !== w || canvas.height !== h) { canvas.width = w; canvas.height = h; }
     const ctx = canvas.getContext('2d');
     ctx.setTransform(ratio, 0, 0, ratio, 0, 0);
     return { ctx, width: rect.width, height: rect.height };
@@ -371,50 +263,44 @@ cat <<'HTML'
       if (!Number.isFinite(minv)) minv = DEFAULT_SCALE.min;
       if (!Number.isFinite(maxv)) maxv = DEFAULT_SCALE.max;
       if (maxv - minv < MIN_SPAN) maxv = minv + MIN_SPAN;
-      return { min: minv, max: maxv, source: 'manual' };
+      cachedScale = { min: minv, max: maxv, source: 'manual' };
+      return cachedScale;
     }
+
+    const now = Date.now();
+    if (now - lastScaleAt < SCALE_THROTTLE_MS) return cachedScale;
+    lastScaleAt = now;
 
     const vals = collectVisibleBins(bundle);
     if (!vals.length) {
-      return { min: backendScale.min, max: backendScale.max, source: 'backend' };
+      cachedScale = { min: backendScale.min, max: backendScale.max, source: 'backend' };
+      return cachedScale;
     }
-
     let p5 = percentile(vals, 0.05);
     let p95 = percentile(vals, 0.95);
     if (!Number.isFinite(p5) || !Number.isFinite(p95)) {
-      return { min: backendScale.min, max: backendScale.max, source: 'backend' };
+      cachedScale = { min: backendScale.min, max: backendScale.max, source: 'backend' };
+      return cachedScale;
     }
     if (p95 - p5 < MIN_SPAN) {
       const mid = (p95 + p5) / 2;
       p5 = mid - MIN_SPAN / 2;
       p95 = mid + MIN_SPAN / 2;
     }
-    return { min: Math.round(p5), max: Math.round(p95), source: 'auto' };
+    cachedScale = { min: Math.round(p5), max: Math.round(p95), source: 'auto' };
+    return cachedScale;
   }
 
   function clamp01(x) { return Math.max(0, Math.min(1, x)); }
-
   function heatColor(v, minv, maxv) {
     if (!Number.isFinite(v)) return '#02050a';
     const t = clamp01((v - minv) / ((maxv - minv) || 1));
-    const stops = [
-      [0.00, [0, 3, 10]],
-      [0.20, [4, 42, 131]],
-      [0.40, [31, 107, 255]],
-      [0.60, [34, 197, 94]],
-      [0.75, [245, 158, 11]],
-      [0.90, [239, 68, 68]],
-      [1.00, [248, 250, 252]]
-    ];
+    const stops = [[0,[0,3,10]],[.20,[4,42,131]],[.40,[31,107,255]],[.60,[34,197,94]],[.75,[245,158,11]],[.90,[239,68,68]],[1,[248,250,252]]];
     for (let i = 0; i < stops.length - 1; i++) {
-      const [t0, c0] = stops[i];
-      const [t1, c1] = stops[i + 1];
+      const [t0,c0] = stops[i]; const [t1,c1] = stops[i + 1];
       if (t >= t0 && t <= t1) {
         const k = (t - t0) / (t1 - t0 || 1);
-        const r = Math.round(c0[0] + (c1[0] - c0[0]) * k);
-        const g = Math.round(c0[1] + (c1[1] - c0[1]) * k);
-        const b = Math.round(c0[2] + (c1[2] - c0[2]) * k);
-        return `rgb(${r},${g},${b})`;
+        return `rgb(${Math.round(c0[0] + (c1[0] - c0[0]) * k)},${Math.round(c0[1] + (c1[1] - c0[1]) * k)},${Math.round(c0[2] + (c1[2] - c0[2]) * k)})`;
       }
     }
     return '#f8fafc';
@@ -436,35 +322,22 @@ cat <<'HTML'
   function drawFreqGrid(ctx, left, top, plotW, plotH, bandLow, bandHigh) {
     if (bandLow <= 0 || bandHigh <= bandLow) return;
     const span = bandHigh - bandLow;
-    ctx.save();
-    ctx.font = '10px system-ui, sans-serif';
-    ctx.textAlign = 'center';
+    ctx.save(); ctx.font = '10px system-ui, sans-serif'; ctx.textAlign = 'center';
     const firstGrid = Math.ceil(bandLow / GRID_MHZ) * GRID_MHZ;
     for (let f = firstGrid; f <= bandHigh; f += GRID_MHZ) {
       const x = left + ((f - bandLow) / span) * plotW;
-      const isMajor = (f % 20 === 0);
-      const isMinor10 = (f % 10 === 0);
+      const isMajor = f % 20 === 0, isMinor10 = f % 10 === 0;
       ctx.strokeStyle = isMajor ? '#334155' : (isMinor10 ? '#1e293b' : '#141c28');
-      ctx.lineWidth = isMajor ? 1 : 0.5;
-      ctx.beginPath();
-      ctx.moveTo(x, top);
-      ctx.lineTo(x, top + plotH);
-      ctx.stroke();
-      if (isMajor || (span <= 200 && isMinor10)) {
-        ctx.fillStyle = isMajor ? '#8ca0b8' : '#5a6b7f';
-        ctx.fillText(String(f), x, top + plotH + 12);
-      }
+      ctx.lineWidth = isMajor ? 1 : .5;
+      ctx.beginPath(); ctx.moveTo(x, top); ctx.lineTo(x, top + plotH); ctx.stroke();
+      if (isMajor || (span <= 200 && isMinor10)) { ctx.fillStyle = isMajor ? '#8ca0b8' : '#5a6b7f'; ctx.fillText(String(f), x, top + plotH + 12); }
     }
     ctx.restore();
   }
 
   function drawNoData(ctx, w, h, text) {
-    ctx.fillStyle = '#05080f';
-    ctx.fillRect(0, 0, w, h);
-    ctx.fillStyle = '#94a3b8';
-    ctx.font = '13px system-ui, sans-serif';
-    ctx.textAlign = 'center';
-    ctx.fillText(text, w / 2, h / 2);
+    ctx.fillStyle = '#05080f'; ctx.fillRect(0, 0, w, h);
+    ctx.fillStyle = '#94a3b8'; ctx.font = '13px system-ui, sans-serif'; ctx.textAlign = 'center'; ctx.fillText(text, w / 2, h / 2);
   }
 
   function drawWaveform(bundle, scale) {
@@ -473,145 +346,103 @@ cat <<'HTML'
     const radio = (bundle.radio && bundle.radio.ok) ? bundle.radio : {};
     const bins = wave.bins || [];
     const band = getBandRange(bundle);
-
-    if (!bins.length) {
-      drawNoData(ctx, width, height, 'No waveform data yet');
-      q('waveNote').textContent = 'No data yet';
-      return;
-    }
+    if (!bins.length) { drawNoData(ctx, width, height, 'No waveform data yet'); q('waveNote').textContent = 'No data yet'; return; }
 
     const left = 46, right = 10, top = 10, bottom = 26;
     const plotW = Math.max(10, width - left - right);
     const plotH = Math.max(10, height - top - bottom);
-
-    ctx.fillStyle = '#05080f';
-    ctx.fillRect(0, 0, width, height);
+    ctx.fillStyle = '#05080f'; ctx.fillRect(0, 0, width, height);
 
     const freq = Number(radio.frequency_mhz || 0);
     const widthMHz = Number(radio.width_mhz || 20);
     const ch = radio.channel || '--';
-
-    // Determine frequency axis range
-    let bandLow = band.low;
-    let bandHigh = band.high;
-    if (bandLow <= 0 || bandHigh <= bandLow) {
-      bandLow = freq > 0 ? freq - widthMHz / 2 : Number(wave.x_start_mhz || 0);
-      bandHigh = freq > 0 ? freq + widthMHz / 2 : Number(wave.x_end_mhz || 0);
-    }
-
-    // Draw 5 MHz frequency grid lines
+    let bandLow = band.low, bandHigh = band.high;
+    if (bandLow <= 0 || bandHigh <= bandLow) { bandLow = freq > 0 ? freq - widthMHz / 2 : Number(wave.x_start_mhz || 0); bandHigh = freq > 0 ? freq + widthMHz / 2 : Number(wave.x_end_mhz || bins.length); }
+    const bandSpan = (bandHigh - bandLow) || 1;
     drawFreqGrid(ctx, left, top, plotW, plotH, bandLow, bandHigh);
 
-    // Horizontal dBm grid lines
-    ctx.strokeStyle = '#1e293b';
-    ctx.lineWidth = 1;
-    for (let i = 0; i <= 4; i++) {
-      const y = top + (plotH * i / 4);
-      ctx.beginPath(); ctx.moveTo(left, y); ctx.lineTo(left + plotW, y); ctx.stroke();
-    }
-
+    ctx.strokeStyle = '#1e293b'; ctx.lineWidth = 1;
+    for (let i = 0; i <= 4; i++) { const y = top + (plotH * i / 4); ctx.beginPath(); ctx.moveTo(left, y); ctx.lineTo(left + plotW, y); ctx.stroke(); }
     const yFromDbm = (v) => top + (scale.max - v) * plotH / ((scale.max - scale.min) || 1);
-
-    // Y axis labels
-    ctx.fillStyle = '#93a3b7';
-    ctx.font = '11px system-ui, sans-serif';
-    ctx.textAlign = 'right';
+    ctx.fillStyle = '#93a3b7'; ctx.font = '11px system-ui, sans-serif'; ctx.textAlign = 'right';
     ctx.fillText(`${scale.max} dBm`, left - 5, top + 10);
     ctx.fillText(`${Math.round((scale.max + scale.min) / 2)} dBm`, left - 5, top + plotH / 2 + 4);
     ctx.fillText(`${scale.min} dBm`, left - 5, top + plotH - 2);
+    if (bandLow > 0 && bandHigh > bandLow) { ctx.textAlign = 'left'; ctx.fillText(`${Math.round(bandLow)} MHz`, left, height - 4); ctx.textAlign = 'right'; ctx.fillText(`${Math.round(bandHigh)} MHz`, left + plotW, height - 4); }
 
-    // X axis edge labels
-    if (bandLow > 0 && bandHigh > bandLow) {
-      ctx.fillStyle = '#8ca0b8';
-      ctx.font = '11px system-ui, sans-serif';
-      ctx.textAlign = 'left';
-      ctx.fillText(`${bandLow} MHz`, left, height - 4);
-      ctx.textAlign = 'right';
-      ctx.fillText(`${bandHigh} MHz`, left + plotW, height - 4);
-    }
-
-    // Band/channel title
-    ctx.fillStyle = '#8ca0b8';
-    ctx.font = '11px system-ui, sans-serif';
-    ctx.textAlign = 'center';
-    const bandSpan = bandHigh - bandLow;
-    const isSweep = bandSpan > 40;
-    if (isSweep) {
-      ctx.fillText(`${band.label} — ${bandLow}–${bandHigh} MHz (${bandSpan} MHz)`, left + plotW / 2, 11);
-    } else {
-      ctx.fillText(`Ch ${ch} / center ${freq || '--'} MHz`, left + plotW / 2, 11);
-    }
-
-    // Draw waveform trace — position bins at their true frequencies
-    const binStartF = freq > 0 ? freq - widthMHz / 2 : bandLow;
-    const binEndF = freq > 0 ? freq + widthMHz / 2 : bandHigh;
-    const binSpan = (binEndF - binStartF) || 1;
-
-    ctx.strokeStyle = '#22d3ee';
-    ctx.lineWidth = 1.8;
-    ctx.beginPath();
+    ctx.strokeStyle = '#22d3ee'; ctx.lineWidth = 1.8; ctx.beginPath();
     let started = false;
     bins.forEach((v, i) => {
-      const binFreq = binStartF + (i + 0.5) * binSpan / bins.length;
-      const x = left + ((binFreq - bandLow) / (bandSpan || 1)) * plotW;
+      const x = left + ((i + .5) / bins.length) * plotW;
       const y = yFromDbm(v);
-      if (x >= left && x <= left + plotW) {
-        if (!started) { ctx.moveTo(x, y); started = true; }
-        else ctx.lineTo(x, y);
-      }
+      if (!started) { ctx.moveTo(x, y); started = true; } else ctx.lineTo(x, y);
     });
     ctx.stroke();
-
-    // Current channel indicator on wideband view
-    if (isSweep && freq > 0 && freq >= bandLow && freq <= bandHigh) {
-      const cx = left + ((freq - bandLow) / bandSpan) * plotW;
-      ctx.strokeStyle = '#64748b';
-      ctx.setLineDash([4, 4]);
-      ctx.beginPath(); ctx.moveTo(cx, top); ctx.lineTo(cx, top + plotH); ctx.stroke();
-      ctx.setLineDash([]);
-    }
-
-    q('waveNote').textContent = isSweep
-      ? `${band.label}: ${bandLow}–${bandHigh} MHz (${Math.ceil(bandSpan / GRID_MHZ)} grid lines at ${GRID_MHZ} MHz)`
-      : `${bins.length} FFT bins across ${widthMHz || '?'} MHz channel (Ch ${ch}, ${freq || '?'} MHz center)`;
+    q('waveNote').textContent = `${bins.length} FFT bins${freq ? ` across ${widthMHz || '?'} MHz channel (Ch ${ch}, ${freq} MHz center)` : ''}`;
   }
 
   function drawHeatmap(canvas, rows, scale, emptyText, bundle) {
     const { ctx, width, height } = setCanvasResolution(canvas);
-    if (!rows || !rows.length) {
-      drawNoData(ctx, width, height, emptyText);
-      return;
-    }
+    if (!rows || !rows.length) { drawNoData(ctx, width, height, emptyText); return; }
     const bins = ((rows[0] || {}).bins || []).length;
-    if (!bins) {
-      drawNoData(ctx, width, height, emptyText);
-      return;
-    }
-
-    ctx.fillStyle = '#05080f';
-    ctx.fillRect(0, 0, width, height);
-
+    if (!bins) { drawNoData(ctx, width, height, emptyText); return; }
+    ctx.fillStyle = '#05080f'; ctx.fillRect(0, 0, width, height);
     const rowCount = rows.length;
     const cellW = width / bins;
     const cellH = height / rowCount;
-
     for (let r = 0; r < rowCount; r++) {
-      const row = rows[r] || {};
-      const arr = row.bins || [];
-      const y = height - ((r + 1) * cellH); // newest at bottom
-      for (let i = 0; i < bins; i++) {
-        ctx.fillStyle = heatColor(arr[i], scale.min, scale.max);
-        ctx.fillRect(i * cellW, y, Math.ceil(cellW), Math.ceil(cellH));
-      }
+      const arr = (rows[r] || {}).bins || [];
+      const y = height - ((r + 1) * cellH);
+      for (let i = 0; i < bins; i++) { ctx.fillStyle = heatColor(arr[i], scale.min, scale.max); ctx.fillRect(i * cellW, y, Math.ceil(cellW), Math.ceil(cellH)); }
+    }
+    if (bundle) { const band = getBandRange(bundle); if (band.low > 0 && band.high > band.low) drawFreqGrid(ctx, 0, 0, width, height, band.low, band.high); }
+  }
+
+  function updateAmbientFromBins(bins) {
+    const now = Date.now();
+    if (!ambientPending || now - ambientPending.started_ms > 60000 || ambientPending.bins.length !== bins.length) {
+      if (ambientPending) ambientRows.push({ bins: ambientPending.bins.slice(), ts: ambientPending.started_ms });
+      while (ambientRows.length > MAX_AMBIENT_ROWS) ambientRows.shift();
+      ambientPending = { started_ms: now, bins: bins.slice() };
+      return;
+    }
+    for (let i = 0; i < bins.length; i++) ambientPending.bins[i] = Math.max(ambientPending.bins[i], bins[i]);
+  }
+
+  function frameRate(now) {
+    fpsWindow.push(now);
+    while (fpsWindow.length && now - fpsWindow[0] > 5000) fpsWindow.shift();
+    return fpsWindow.length > 1 ? ((fpsWindow.length - 1) * 1000 / (fpsWindow[fpsWindow.length - 1] - fpsWindow[0])).toFixed(2) : '0.00';
+  }
+
+  function normalizeAndRender(data) {
+    if (data && Array.isArray(data.bins)) {
+      const bins = data.bins.map(Number).filter(Number.isFinite);
+      if (!bins.length) return;
+      const now = Date.now();
+      liveFrameCount += 1; lastFrameAt = now;
+      liveRows.push({ bins: bins.slice(), ts: now });
+      while (liveRows.length > MAX_WATERFALL_ROWS) liveRows.shift();
+      updateAmbientFromBins(bins);
+      const radio = (latestBundle && latestBundle.radio) || { ok:false };
+      const ambRows = ambientRows.concat(ambientPending ? [{ bins: ambientPending.bins.slice(), pending:true }] : []);
+      const bundle = {
+        ok: true,
+        source: streamState,
+        radio,
+        waveform: { bins },
+        waterfall: { rows: liveRows },
+        ambient: { rows: ambRows, pending: !!ambientPending },
+        waterfall_row_count: liveRows.length,
+        ambient_row_count: ambRows.length,
+        capture: { state: 'running', frames_captured: liveFrameCount },
+        capture_metrics: { frames_captured: liveFrameCount, frames_per_second: frameRate(now), last_frame_age_seconds: 0, run_elapsed_seconds: 0, run_remaining_seconds: 0, state_dir_bytes: 0 }
+      };
+      render(bundle);
+      return;
     }
 
-    // Overlay 5 MHz grid lines on heatmap
-    if (bundle) {
-      const band = getBandRange(bundle);
-      if (band.low > 0 && band.high > band.low) {
-        drawFreqGrid(ctx, 0, 0, width, height, band.low, band.high);
-      }
-    }
+    if (data && (data.ok || data.waveform || data.waterfall)) render(data);
   }
 
   function updateTop(bundle, scale) {
@@ -620,37 +451,30 @@ cat <<'HTML'
     const r = (bundle.radio && bundle.radio.ok) ? bundle.radio : {};
     const wfRows = Number(bundle.waterfall_row_count || ((bundle.waterfall || {}).rows || []).length || 0);
     const amRows = Number(bundle.ambient_row_count || ((bundle.ambient || {}).rows || []).length || 0);
+    const age = lastFrameAt ? Math.max(0, Math.round((Date.now() - lastFrameAt) / 1000)) : (m.last_frame_age_seconds ?? bundle.last_frame_age_seconds ?? -1);
 
-    q('raw').textContent = JSON.stringify(bundle, null, 2);
-
+    raw.textContent = JSON.stringify(bundle, null, 2);
     q('frames').textContent = String(c.frames_captured || m.frames_captured || 0);
-    q('lastage').textContent = (m.last_frame_age_seconds ?? bundle.last_frame_age_seconds ?? -1) >= 0
-      ? `${m.last_frame_age_seconds ?? bundle.last_frame_age_seconds}s ago` : '--';
+    q('lastage').textContent = age >= 0 ? `${age}s ago` : '--';
     q('framerate').textContent = `${m.frames_per_second ?? bundle.frame_rate ?? '0.00'}/s`;
     q('elapsed').textContent = `${m.run_elapsed_seconds ?? 0}s / ${m.run_remaining_seconds ?? 0}s`;
-
     const stBytes = m.state_dir_bytes ?? 0;
     q('storage').textContent = stBytes > 1048576 ? `${(stBytes/1048576).toFixed(1)} MB` : stBytes > 1024 ? `${(stBytes/1024).toFixed(0)} KB` : `${stBytes} B`;
-
     q('rfreq').textContent = r.frequency_mhz ? `${r.frequency_mhz} MHz` : '--';
     q('rchan').textContent = r.channel || '--';
     q('rwidth').textContent = r.width_mhz ? `${r.width_mhz} MHz` : '--';
     q('rmode').textContent = [r.mode || '--', r.ssid_or_ibss || ''].filter(Boolean).join(' / ');
 
-    const hasData = ((bundle.waveform || {}).bins || []).length || wfRows > 0;
-    const state = c.state || 'idle';
+    const state = c.state || (streamState === 'ws_live' || streamState === 'mock' ? 'running' : 'idle');
     const stateBadge = q('stateBadge');
     stateBadge.textContent = state;
     stateBadge.className = 'badge ' + (state === 'running' ? 'ok' : (state === 'error' ? 'bad' : 'muted'));
+    setStreamState(streamState);
 
-    q('liveStatus').textContent = hasData ? 'live' : 'waiting';
-    q('liveStatus').className = 'badge ' + (hasData ? 'ok' : 'muted');
-
-    q('scaleInfo').textContent = `Display range: ${scale.min} to ${scale.max} dBm (${q('autoScale').checked ? 'auto' : 'manual'})`;
+    q('scaleInfo').textContent = `Display range: ${scale.min} to ${scale.max} dBm (${scale.source || (q('autoScale').checked ? 'auto' : 'manual')})`;
     q('legendMin').textContent = `${scale.min} dBm`;
     q('legendMid').textContent = `${Math.round((scale.min + scale.max) / 2)} dBm`;
     q('legendMax').textContent = `${scale.max} dBm`;
-
     q('wfNote').textContent = `Newest row at bottom • ${wfRows} rows`;
     const amb = bundle.ambient || {};
     q('ambientNote').textContent = `${amRows} rows${amb.pending ? ' • current row in progress' : ''}`;
@@ -658,29 +482,32 @@ cat <<'HTML'
 
   function render(bundle) {
     latestBundle = bundle;
+    if (Number.isFinite(Number(bundle.display_min_dbm))) backendScale.min = Number(bundle.display_min_dbm);
+    if (Number.isFinite(Number(bundle.display_max_dbm))) backendScale.max = Number(bundle.display_max_dbm);
+    if (backendScale.max - backendScale.min < MIN_SPAN) backendScale.max = backendScale.min + MIN_SPAN;
     const scale = currentScale(bundle);
     updateTop(bundle, scale);
-
     drawWaveform(bundle, scale);
     drawHeatmap(waterfallCanvas, (bundle.waterfall || {}).rows || [], scale, 'No waterfall rows yet', bundle);
     drawHeatmap(ambientCanvas, (bundle.ambient || {}).rows || [], scale, 'No ambient rows yet', bundle);
   }
 
   async function pollBundle() {
-    if (pollBusy) return;
+    if (pollBusy || streamState === 'ws_live' || streamState === 'mock') return;
     pollBusy = true;
     try {
       const j = await getJson(qs('heatmap_bundle'));
       if (!j || !j.ok) {
-        q('raw').textContent = JSON.stringify(j, null, 2);
+        raw.textContent = JSON.stringify(j, null, 2);
         q('stateBadge').textContent = (j && j.error) ? j.error : 'error';
         q('stateBadge').className = 'badge bad';
+        setStreamState('offline');
         return;
       }
-      backendScale.min = Number.isFinite(Number(j.display_min_dbm)) ? Number(j.display_min_dbm) : backendScale.min;
-      backendScale.max = Number.isFinite(Number(j.display_max_dbm)) ? Number(j.display_max_dbm) : backendScale.max;
-      if (backendScale.max - backendScale.min < MIN_SPAN) backendScale.max = backendScale.min + MIN_SPAN;
-      render(j);
+      normalizeAndRender(j);
+    } catch (e) {
+      raw.textContent = JSON.stringify({ ok:false, error:'poll failed', detail:String(e) }, null, 2);
+      setStreamState('offline');
     } finally {
       pollBusy = false;
     }
@@ -690,31 +517,53 @@ cat <<'HTML'
     q('stateBadge').textContent = pendingText || action;
     q('stateBadge').className = 'badge muted';
     const j = await getJson(qs(action));
-    q('raw').textContent = JSON.stringify(j, null, 2);
-    setTimeout(pollBundle, 400);
+    raw.textContent = JSON.stringify(j, null, 2);
+    if (action === 'start') connectDataStream();
+    else if (action === 'stop') { if (ws) try { ws.close(); } catch (e) {}; startPollingFallback(); }
+    else setTimeout(pollBundle, 400);
+  }
+
+  function startMockDaemon() {
+    if (pollInterval) { clearInterval(pollInterval); pollInterval = null; }
+    if (ws) { try { ws.close(); } catch (e) {} ws = null; }
+    liveRows = []; ambientRows = []; ambientPending = null; liveFrameCount = 0; fpsWindow = [];
+    setStreamState('mock');
+    mockInterval = setInterval(() => {
+      const mockBins = [];
+      const centerBin = 28;
+      for (let i = 0; i < 56; i++) {
+        let noise = -108.0 + (Math.random() * 5.0);
+        if (Math.abs(i - centerBin) < 4 && Math.random() > 0.3) noise += 35.0 * Math.sin((i - centerBin + 4) / 8 * Math.PI);
+        mockBins.push(parseFloat(noise.toFixed(1)));
+      }
+      normalizeAndRender({ bins: mockBins });
+    }, 100);
+  }
+
+  function stopMockDaemon() {
+    if (mockInterval) { clearInterval(mockInterval); mockInterval = null; }
   }
 
   q('start').addEventListener('click', () => doAction('start', 'starting...'));
   q('stop').addEventListener('click', () => doAction('stop', 'stopping...'));
   q('reset').addEventListener('click', () => doAction('reset', 'resetting...'));
-
+  q('mock').addEventListener('click', () => mockInterval ? (stopMockDaemon(), startPollingFallback()) : startMockDaemon());
   q('resetScale').addEventListener('click', () => {
     const minv = Number.isFinite(backendScale.min) ? backendScale.min : DEFAULT_SCALE.min;
     const maxv = Number.isFinite(backendScale.max) ? backendScale.max : DEFAULT_SCALE.max;
     q('minDbm').value = String(minv);
     q('maxDbm').value = String(maxv);
+    lastScaleAt = 0;
     if (latestBundle) render(latestBundle);
   });
-
   q('band').addEventListener('change', () => latestBundle && render(latestBundle));
-  q('autoScale').addEventListener('change', () => latestBundle && render(latestBundle));
+  q('autoScale').addEventListener('change', () => { lastScaleAt = 0; latestBundle && render(latestBundle); });
   q('minDbm').addEventListener('change', () => latestBundle && render(latestBundle));
   q('maxDbm').addEventListener('change', () => latestBundle && render(latestBundle));
-
   window.addEventListener('resize', () => latestBundle && render(latestBundle));
 
-  setInterval(pollBundle, POLL_MS);
-  pollBundle();
+  connectDataStream();
+  if (new URLSearchParams(window.location.search).get('mock') === '1') startMockDaemon();
 })();
 </script>
 </body>
