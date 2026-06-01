@@ -2,7 +2,7 @@ include $(TOPDIR)/rules.mk
 
 PKG_NAME:=aredn-rfeye
 PKG_VERSION:=0.1.0
-PKG_RELEASE:=17
+PKG_RELEASE:=18
 PKG_LICENSE:=GPL-3.0-or-later
 PKG_MAINTAINER:=Mathison Ott
 
@@ -24,11 +24,15 @@ define Build/Compile
 	$(TARGET_CC) $(TARGET_CFLAGS) -O2 -Wall -Wextra \
 		-o $(PKG_BUILD_DIR)/rfeye-spectral-parse \
 		./src/rfeye_spectral_parse.c
+	$(TARGET_CC) $(TARGET_CFLAGS) -O2 -Wall -Wextra \
+		-o $(PKG_BUILD_DIR)/rfeye-wmac-rebind \
+		./src/rfeye_wmac_rebind.c
 endef
 
 define Package/aredn-rfeye/install
 	$(INSTALL_DIR) $(1)/usr/lib/rfeye
 	$(INSTALL_BIN) $(PKG_BUILD_DIR)/rfeye-spectral-parse $(1)/usr/lib/rfeye/rfeye-spectral-parse
+	$(INSTALL_BIN) $(PKG_BUILD_DIR)/rfeye-wmac-rebind $(1)/usr/lib/rfeye/rfeye-wmac-rebind
 	[ ! -f ./files/usr/lib/rfeye/rfeye-probe.sh ] || $(INSTALL_BIN) ./files/usr/lib/rfeye/rfeye-probe.sh $(1)/usr/lib/rfeye/rfeye-probe.sh
 	$(INSTALL_BIN) ./files/usr/lib/rfeye/rfeye-wmac-provision.sh $(1)/usr/lib/rfeye/rfeye-wmac-provision.sh
 
