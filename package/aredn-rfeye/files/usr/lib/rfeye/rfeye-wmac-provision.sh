@@ -3,32 +3,33 @@
 #
 # PR #2730 enables the QCA9558 WMAC with qca,no-eeprom in the DTS.
 # The WMAC will NOT initialize until a caldata firmware file is provided.
-# This script installs the caldata and reloads ath9k to bring up the WMAC.
 #
-# Safety rules:
-#   - Never writes to flash (ART/EEPROM partition)
-#   - Caldata file goes to /lib/firmware (overlay or tmpfs)
-#   - If ath9k reload fails, ath10k production radio is unaffected
-#   - Idempotent: safe to run multiple times
+# r17 safety model:
+#   - Never writes to ART/EEPROM flash
+#   - Installs only an ath9k firmware caldata file under /lib/firmware
+#   - Prefers WMAC-only sysfs platform unbind/bind over rmmod/modprobe
+#   - Does not disturb the production ath10k PCI radio
+#   - Treats substitute/reference caldata as bench-only until validated
 
 set -u
 
 # --- Configuration ---
 
-# The firmware path ath9k expects when qca,no-eeprom is set.
-# On ath79 QCA9558, the WMAC AHB address is 18100000.
-# OpenWrt ath9k tries: /lib/firmware/ath9k-eeprom-ahb-18100000.wmac.bin
-# Also tries: /lib/firmware/ath9k/caldata.bin and platform-specific paths.
-# We try multiple paths; the first one that works wins.
+WMAC_PLATFORM_ID="18100000.wmac"
+ATH9K_PLATFORM_DRIVER="/sys/bus/platform/drivers/ath9k"
+WMAC_PLATFORM_DEVICE="/sys/bus/platform/devices/$WMAC_PLATFORM_ID"
+
+# The firmware path ath9k expects when qca,no-eeprom is set on ath79 QCA9558.
 CALDATA_PATHS="
 /lib/firmware/ath9k-eeprom-ahb-18100000.wmac.bin
 /lib/firmware/ath9k-eeprom-pci-0000:00:00.0.bin
 "
 
-# Shipped reference caldata (WA board WMAC caldata, AR9300 template format)
+# Shipped reference caldata. This is a WA-board WMAC reference/template and
+# must remain treated as bench-only until validated on each target model.
 REFERENCE_CALDATA="/usr/lib/rfeye/caldata/ath9k-caldata-wmac-wa-reference.bin"
 
-# Supported board sysids
+# Supported board sysids.
 # 0xe3d5 = PowerBeam 5AC 500 (XC)
 # 0xe1f5 = Rocket 5AC Lite (XC)
 SUPPORTED_SYSIDS="0xe3d5 0xe1f5"
@@ -36,32 +37,28 @@ SUPPORTED_SYSIDS="0xe3d5 0xe1f5"
 # --- Helpers ---
 
 json_escape() { printf '%s' "$1" | sed 's/\\/\\\\/g; s/"/\\"/g'; }
-
 log() { logger -t rfeye-wmac "$@" 2>/dev/null; echo "$@" >&2; }
 
 get_board_sysid() {
-    # Read sysid from board.json or DTS
     if [ -f /etc/board.json ]; then
         local model
-        model="$(cat /etc/board.json 2>/dev/null | \
-            sed -n 's/.*"id":[[:space:]]*"\([^"]*\)".*/\1/p' | head -1)"
+        model="$(cat /etc/board.json 2>/dev/null | sed -n 's/.*"id":[[:space:]]*"\([^"]*\)".*/\1/p' | head -1)"
         case "$model" in
             *powerbeam-5ac-500*) echo "0xe3d5"; return 0 ;;
             *rocket-5ac-lite*)   echo "0xe1f5"; return 0 ;;
         esac
     fi
-    # Fallback: read from EEPROM header
+
     if [ -f /proc/mtd ]; then
         local art_num art_dev sysid_hex
-        art_num="$(grep -i '"art"' /proc/mtd 2>/dev/null | head -1 | \
-            sed 's/mtd\([0-9]*\):.*/\1/')"
-        [ -n "$art_num" ] && art_dev="/dev/mtdblock${art_num}"
-        if [ -n "$art_dev" ] && [ -e "$art_dev" ]; then
-            sysid_hex="$(dd if="$art_dev" bs=1 skip=12 count=2 2>/dev/null | \
-                hexdump -v -e '1/1 "%02x"' 2>/dev/null)"
+        art_num="$(grep -i '"art"' /proc/mtd 2>/dev/null | head -1 | sed 's/mtd\([0-9]*\):.*/\1/')"
+        [ -n "${art_num:-}" ] && art_dev="/dev/mtdblock${art_num}"
+        if [ -n "${art_dev:-}" ] && [ -e "$art_dev" ]; then
+            sysid_hex="$(dd if="$art_dev" bs=1 skip=12 count=2 2>/dev/null | hexdump -v -e '1/1 "%02x"' 2>/dev/null)"
             [ -n "$sysid_hex" ] && echo "0x$sysid_hex" && return 0
         fi
     fi
+
     echo "unknown"
 }
 
@@ -86,7 +83,6 @@ is_supported_board() {
 }
 
 wmac_phy_exists() {
-    # Check if a WMAC phy (ath9k on AHB) exists
     for p in /sys/kernel/debug/ieee80211/phy*; do
         [ -d "$p/ath9k" ] && return 0
     done
@@ -117,15 +113,95 @@ caldata_installed() {
 }
 
 ath9k_loaded() {
-    lsmod 2>/dev/null | grep -q "^ath9k " && return 0
+    lsmod 2>/dev/null | grep -q '^ath9k ' && return 0
     return 1
+}
+
+platform_device_present() { [ -e "$WMAC_PLATFORM_DEVICE" ]; }
+platform_bind_available() { [ -w "$ATH9K_PLATFORM_DRIVER/bind" ]; }
+platform_unbind_available() { [ -w "$ATH9K_PLATFORM_DRIVER/unbind" ]; }
+platform_bound() { [ -e "$ATH9K_PLATFORM_DRIVER/$WMAC_PLATFORM_ID" ] || [ -L "$ATH9K_PLATFORM_DRIVER/$WMAC_PLATFORM_ID" ]; }
+
+wait_for_wmac() {
+    local tries=0 max="${1:-10}"
+    while [ "$tries" -lt "$max" ]; do
+        wmac_phy_exists && return 0
+        tries=$((tries + 1))
+        sleep 1
+    done
+    return 1
+}
+
+create_monitor_iface() {
+    local phy="$1"
+    [ -n "$phy" ] || return 0
+    if ! iw dev 2>/dev/null | grep -q 'mon1\|rfeye-mon'; then
+        iw phy "$phy" interface add rfeye-mon type monitor 2>/dev/null || true
+        ip link set rfeye-mon up 2>/dev/null || true
+        log "created monitor interface rfeye-mon on $phy"
+    fi
+}
+
+rebind_wmac_platform() {
+    platform_device_present || {
+        echo "WMAC platform device not present: $WMAC_PLATFORM_DEVICE" >&2
+        return 1
+    }
+
+    # If ath9k is not loaded yet, loading it is safer than removing/reloading it.
+    if ! ath9k_loaded; then
+        modprobe ath9k 2>/dev/null || {
+            echo "modprobe ath9k failed" >&2
+            return 1
+        }
+        sleep 1
+    fi
+
+    platform_bind_available || {
+        echo "ath9k platform bind control unavailable" >&2
+        return 1
+    }
+
+    if platform_bound; then
+        platform_unbind_available || {
+            echo "ath9k platform unbind control unavailable" >&2
+            return 1
+        }
+        log "unbinding ath9k WMAC platform device $WMAC_PLATFORM_ID"
+        echo "$WMAC_PLATFORM_ID" > "$ATH9K_PLATFORM_DRIVER/unbind" 2>/dev/null || {
+            echo "failed to unbind $WMAC_PLATFORM_ID" >&2
+            return 1
+        }
+        sleep 1
+    fi
+
+    log "binding ath9k WMAC platform device $WMAC_PLATFORM_ID"
+    echo "$WMAC_PLATFORM_ID" > "$ATH9K_PLATFORM_DRIVER/bind" 2>/dev/null || {
+        echo "failed to bind $WMAC_PLATFORM_ID" >&2
+        return 1
+    }
+
+    wait_for_wmac 10
+}
+
+legacy_module_reload() {
+    # Last-resort escape hatch only. Disabled by default because removing ath9k
+    # is broader than the single WMAC platform device and may be disruptive.
+    [ "${RFEYE_ALLOW_RMMOD:-0}" = "1" ] || return 1
+    log "RFEYE_ALLOW_RMMOD=1 set; attempting legacy ath9k module reload"
+    if ath9k_loaded; then
+        rmmod ath9k 2>/dev/null || true
+        sleep 1
+    fi
+    modprobe ath9k 2>/dev/null || return 1
+    wait_for_wmac 10
 }
 
 # --- Commands ---
 
 status_cmd() {
     local sysid model supported="false" wmac="false" spectral="false"
-    local caldata="false" ath9k="false" phy=""
+    local caldata="false" ath9k="false" phy="" pdev="false" pbind="false" pbound="false"
 
     sysid="$(get_board_sysid)"
     model="$(get_board_model)"
@@ -134,10 +210,13 @@ status_cmd() {
     wmac_spectral_ready && spectral="true"
     caldata_installed && caldata="true"
     ath9k_loaded && ath9k="true"
+    platform_device_present && pdev="true"
+    platform_bind_available && pbind="true"
+    platform_bound && pbound="true"
     phy="$(wmac_phy_name)"
 
     cat <<JSON
-{"ok":true,"board":{"sysid":"$(json_escape "$sysid")","model":"$(json_escape "$model")","supported":$supported},"wmac":{"phy":"$(json_escape "$phy")","initialized":$wmac,"spectral_ready":$spectral},"caldata":{"installed":$caldata,"reference":"$REFERENCE_CALDATA"},"ath9k_loaded":$ath9k}
+{"ok":true,"board":{"sysid":"$(json_escape "$sysid")","model":"$(json_escape "$model")","supported":$supported},"wmac":{"platform_id":"$WMAC_PLATFORM_ID","platform_device_present":$pdev,"platform_bound":$pbound,"phy":"$(json_escape "$phy")","initialized":$wmac,"spectral_ready":$spectral},"caldata":{"installed":$caldata,"reference":"$REFERENCE_CALDATA"},"ath9k":{"loaded":$ath9k,"platform_bind_available":$pbind}}
 JSON
 }
 
@@ -148,7 +227,7 @@ install_cmd() {
     model="$(get_board_model)"
 
     if ! is_supported_board "$sysid"; then
-        echo "{\"ok\":false,\"error\":\"unsupported board: $model ($sysid)\"}"
+        echo "{\"ok\":false,\"error\":\"unsupported board: $(json_escape "$model") ($sysid)\"}"
         return 1
     fi
 
@@ -159,14 +238,12 @@ install_cmd() {
         return 0
     fi
 
-    # Check reference caldata exists
     caldata_src="$REFERENCE_CALDATA"
     if [ ! -f "$caldata_src" ]; then
-        echo "{\"ok\":false,\"error\":\"reference caldata not found: $caldata_src\"}"
+        echo "{\"ok\":false,\"error\":\"reference caldata not found: $(json_escape "$caldata_src")\"}"
         return 1
     fi
 
-    # Install caldata to firmware path(s)
     for caldata_dst in $CALDATA_PATHS; do
         local dir
         dir="$(dirname "$caldata_dst")"
@@ -182,79 +259,54 @@ install_cmd() {
         return 1
     fi
 
-    echo "{\"ok\":true,\"action\":\"installed\",\"caldata_path\":\"$(json_escape "$installed_path")\",\"source\":\"$(json_escape "$caldata_src")\",\"message\":\"caldata installed, run 'reload' to initialize WMAC\"}"
+    echo "{\"ok\":true,\"action\":\"installed\",\"caldata_path\":\"$(json_escape "$installed_path")\",\"source\":\"$(json_escape "$caldata_src")\",\"message\":\"caldata installed, run reload to initialize WMAC with sysfs bind/unbind\"}"
 }
 
 reload_cmd() {
-    local sysid model
+    local sysid model phy rebind_err=""
 
     sysid="$(get_board_sysid)"
     model="$(get_board_model)"
 
     if ! is_supported_board "$sysid"; then
-        echo "{\"ok\":false,\"error\":\"unsupported board: $model ($sysid)\"}"
+        echo "{\"ok\":false,\"error\":\"unsupported board: $(json_escape "$model") ($sysid)\"}"
         return 1
     fi
 
     if ! caldata_installed; then
-        echo "{\"ok\":false,\"error\":\"no caldata installed, run 'install' first\"}"
+        echo "{\"ok\":false,\"error\":\"no caldata installed, run install first\"}"
         return 1
     fi
 
-    # Reload ath9k module
-    log "reloading ath9k module..."
-
-    if ath9k_loaded; then
-        rmmod ath9k 2>/dev/null || true
-        sleep 1
-    fi
-
-    modprobe ath9k 2>/dev/null || {
-        echo "{\"ok\":false,\"error\":\"modprobe ath9k failed\"}"
-        return 1
-    }
-
-    # Wait for WMAC to initialize
-    local tries=0
-    while [ "$tries" -lt 10 ]; do
-        if wmac_phy_exists; then
-            break
+    if rebind_err="$(rebind_wmac_platform 2>&1)"; then
+        phy="$(wmac_phy_name)"
+        create_monitor_iface "$phy"
+        if wmac_spectral_ready; then
+            log "WMAC spectral scanning ready on $phy after platform rebind"
+            echo "{\"ok\":true,\"action\":\"platform_rebound\",\"phy\":\"$(json_escape "$phy")\",\"spectral_ready\":true,\"message\":\"WMAC initialized via sysfs platform bind/unbind\"}"
+            return 0
         fi
-        tries=$((tries + 1))
-        sleep 1
-    done
-
-    if ! wmac_phy_exists; then
-        echo "{\"ok\":false,\"error\":\"ath9k loaded but WMAC phy did not appear after ${tries}s\"}"
-        return 1
-    fi
-
-    local phy
-    phy="$(wmac_phy_name)"
-
-    # Create monitor interface for spectral scanning
-    if ! iw dev 2>/dev/null | grep -q "mon1\|rfeye-mon"; then
-        iw phy "$phy" interface add rfeye-mon type monitor 2>/dev/null || true
-        ip link set rfeye-mon up 2>/dev/null || true
-        log "created monitor interface rfeye-mon on $phy"
-    fi
-
-    # Verify spectral scan is available
-    if wmac_spectral_ready; then
-        log "WMAC spectral scanning ready on $phy"
-        echo "{\"ok\":true,\"action\":\"reloaded\",\"phy\":\"$(json_escape "$phy")\",\"spectral_ready\":true,\"message\":\"WMAC initialized, spectral scanning available\"}"
+        echo "{\"ok\":true,\"action\":\"platform_rebound\",\"phy\":\"$(json_escape "$phy")\",\"spectral_ready\":false,\"message\":\"WMAC rebound but spectral_scan_ctl not found\"}"
         return 0
     fi
 
-    echo "{\"ok\":true,\"action\":\"reloaded\",\"phy\":\"$(json_escape "$phy")\",\"spectral_ready\":false,\"message\":\"WMAC initialized but spectral_scan_ctl not found — may need reboot\"}"
+    log "platform rebind failed: $rebind_err"
+
+    if legacy_module_reload; then
+        phy="$(wmac_phy_name)"
+        create_monitor_iface "$phy"
+        echo "{\"ok\":true,\"action\":\"legacy_module_reload\",\"phy\":\"$(json_escape "$phy")\",\"spectral_ready\":$(wmac_spectral_ready && echo true || echo false),\"message\":\"WMAC initialized by legacy module reload\"}"
+        return 0
+    fi
+
+    echo "{\"ok\":false,\"error\":\"WMAC sysfs rebind failed; not running rmmod unless RFEYE_ALLOW_RMMOD=1\",\"detail\":\"$(json_escape "$rebind_err")\"}"
+    return 1
 }
 
 provision_cmd() {
-    # Combined install + reload in one step
-    local result
+    local result action
 
     result="$(install_cmd)"
-    local action
     action="$(printf '%s' "$result" | sed -n 's/.*"action":"\([^"]*\)".*/\1/p')"
 
     case "$action" in
@@ -263,10 +315,8 @@ provision_cmd() {
             return 0
             ;;
         installed)
-            # Proceed to reload
             ;;
         *)
-            # install failed
             echo "$result"
             return 1
             ;;
@@ -285,13 +335,13 @@ remove_cmd() {
         fi
     done
 
-    # Unload ath9k if loaded (WMAC only — ath10k stays)
-    if ath9k_loaded; then
-        rmmod ath9k 2>/dev/null || true
-        log "unloaded ath9k"
+    # Do not rmmod ath9k here. If currently bound, detach only the WMAC device.
+    if platform_bound && platform_unbind_available; then
+        echo "$WMAC_PLATFORM_ID" > "$ATH9K_PLATFORM_DRIVER/unbind" 2>/dev/null || true
+        log "unbound ath9k WMAC platform device $WMAC_PLATFORM_ID"
     fi
 
-    echo "{\"ok\":true,\"action\":\"removed\",\"files_removed\":$removed}"
+    echo "{\"ok\":true,\"action\":\"removed\",\"files_removed\":$removed,\"message\":\"caldata removed; ath9k module left loaded\"}"
 }
 
 # --- Main ---
