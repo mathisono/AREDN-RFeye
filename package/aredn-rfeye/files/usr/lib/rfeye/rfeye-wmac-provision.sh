@@ -7,7 +7,8 @@
 # r17 safety model:
 #   - Never writes to ART/EEPROM flash
 #   - Installs only an ath9k firmware caldata file under /lib/firmware
-#   - Prefers WMAC-only sysfs platform unbind/bind over rmmod/modprobe
+#   - Prefers the compiled WMAC-only helper over shell sysfs writes
+#   - Falls back to WMAC-only sysfs platform unbind/bind if needed
 #   - Does not disturb the production ath10k PCI radio
 #   - Treats substitute/reference caldata as bench-only until validated
 
@@ -18,20 +19,15 @@ set -u
 WMAC_PLATFORM_ID="18100000.wmac"
 ATH9K_PLATFORM_DRIVER="/sys/bus/platform/drivers/ath9k"
 WMAC_PLATFORM_DEVICE="/sys/bus/platform/devices/$WMAC_PLATFORM_ID"
+RFEYE_WMAC_REBIND="/usr/lib/rfeye/rfeye-wmac-rebind"
+PRIMARY_CALDATA_PATH="/lib/firmware/ath9k-eeprom-ahb-18100000.wmac.bin"
 
-# The firmware path ath9k expects when qca,no-eeprom is set on ath79 QCA9558.
 CALDATA_PATHS="
-/lib/firmware/ath9k-eeprom-ahb-18100000.wmac.bin
+$PRIMARY_CALDATA_PATH
 /lib/firmware/ath9k-eeprom-pci-0000:00:00.0.bin
 "
 
-# Shipped reference caldata. This is a WA-board WMAC reference/template and
-# must remain treated as bench-only until validated on each target model.
 REFERENCE_CALDATA="/usr/lib/rfeye/caldata/ath9k-caldata-wmac-wa-reference.bin"
-
-# Supported board sysids.
-# 0xe3d5 = PowerBeam 5AC 500 (XC)
-# 0xe1f5 = Rocket 5AC Lite (XC)
 SUPPORTED_SYSIDS="0xe3d5 0xe1f5"
 
 # --- Helpers ---
@@ -112,11 +108,8 @@ caldata_installed() {
     return 1
 }
 
-ath9k_loaded() {
-    lsmod 2>/dev/null | grep -q '^ath9k ' && return 0
-    return 1
-}
-
+ath9k_loaded() { lsmod 2>/dev/null | grep -q '^ath9k '; }
+helper_available() { [ -x "$RFEYE_WMAC_REBIND" ]; }
 platform_device_present() { [ -e "$WMAC_PLATFORM_DEVICE" ]; }
 platform_bind_available() { [ -w "$ATH9K_PLATFORM_DRIVER/bind" ]; }
 platform_unbind_available() { [ -w "$ATH9K_PLATFORM_DRIVER/unbind" ]; }
@@ -142,13 +135,56 @@ create_monitor_iface() {
     fi
 }
 
-rebind_wmac_platform() {
+helper_install_caldata() {
+    helper_available || return 1
+    "$RFEYE_WMAC_REBIND" --install --quiet \
+        --source "$REFERENCE_CALDATA" \
+        --dest "$PRIMARY_CALDATA_PATH"
+}
+
+helper_rebind_wmac() {
+    helper_available || return 1
+    "$RFEYE_WMAC_REBIND" --rebind --quiet \
+        --source "$REFERENCE_CALDATA" \
+        --dest "$PRIMARY_CALDATA_PATH"
+}
+
+helper_unbind_wmac() {
+    helper_available || return 1
+    "$RFEYE_WMAC_REBIND" --unbind --quiet
+}
+
+fallback_install_caldata() {
+    local caldata_src="$REFERENCE_CALDATA" caldata_dst installed_path=""
+
+    [ -f "$caldata_src" ] || {
+        echo "reference caldata not found: $caldata_src" >&2
+        return 1
+    }
+
+    for caldata_dst in $CALDATA_PATHS; do
+        local dir
+        dir="$(dirname "$caldata_dst")"
+        mkdir -p "$dir" 2>/dev/null || continue
+        cp "$caldata_src" "$caldata_dst" 2>/dev/null || continue
+        log "installed caldata: $caldata_dst (from $caldata_src)"
+        installed_path="$caldata_dst"
+        break
+    done
+
+    [ -n "$installed_path" ] || {
+        echo "failed to install caldata to any firmware path" >&2
+        return 1
+    }
+    echo "$installed_path"
+}
+
+fallback_rebind_wmac_platform() {
     platform_device_present || {
         echo "WMAC platform device not present: $WMAC_PLATFORM_DEVICE" >&2
         return 1
     }
 
-    # If ath9k is not loaded yet, loading it is safer than removing/reloading it.
     if ! ath9k_loaded; then
         modprobe ath9k 2>/dev/null || {
             echo "modprobe ath9k failed" >&2
@@ -185,8 +221,6 @@ rebind_wmac_platform() {
 }
 
 legacy_module_reload() {
-    # Last-resort escape hatch only. Disabled by default because removing ath9k
-    # is broader than the single WMAC platform device and may be disruptive.
     [ "${RFEYE_ALLOW_RMMOD:-0}" = "1" ] || return 1
     log "RFEYE_ALLOW_RMMOD=1 set; attempting legacy ath9k module reload"
     if ath9k_loaded; then
@@ -201,7 +235,7 @@ legacy_module_reload() {
 
 status_cmd() {
     local sysid model supported="false" wmac="false" spectral="false"
-    local caldata="false" ath9k="false" phy="" pdev="false" pbind="false" pbound="false"
+    local caldata="false" ath9k="false" phy="" pdev="false" pbind="false" pbound="false" helper="false"
 
     sysid="$(get_board_sysid)"
     model="$(get_board_model)"
@@ -213,15 +247,16 @@ status_cmd() {
     platform_device_present && pdev="true"
     platform_bind_available && pbind="true"
     platform_bound && pbound="true"
+    helper_available && helper="true"
     phy="$(wmac_phy_name)"
 
     cat <<JSON
-{"ok":true,"board":{"sysid":"$(json_escape "$sysid")","model":"$(json_escape "$model")","supported":$supported},"wmac":{"platform_id":"$WMAC_PLATFORM_ID","platform_device_present":$pdev,"platform_bound":$pbound,"phy":"$(json_escape "$phy")","initialized":$wmac,"spectral_ready":$spectral},"caldata":{"installed":$caldata,"reference":"$REFERENCE_CALDATA"},"ath9k":{"loaded":$ath9k,"platform_bind_available":$pbind}}
+{"ok":true,"board":{"sysid":"$(json_escape "$sysid")","model":"$(json_escape "$model")","supported":$supported},"wmac":{"platform_id":"$WMAC_PLATFORM_ID","platform_device_present":$pdev,"platform_bound":$pbound,"phy":"$(json_escape "$phy")","initialized":$wmac,"spectral_ready":$spectral},"caldata":{"installed":$caldata,"reference":"$REFERENCE_CALDATA","primary_path":"$PRIMARY_CALDATA_PATH"},"ath9k":{"loaded":$ath9k,"platform_bind_available":$pbind},"helper":{"available":$helper,"path":"$RFEYE_WMAC_REBIND"}}
 JSON
 }
 
 install_cmd() {
-    local sysid model caldata_src caldata_dst installed_path=""
+    local sysid model helper_result fallback_result
 
     sysid="$(get_board_sysid)"
     model="$(get_board_model)"
@@ -238,32 +273,27 @@ install_cmd() {
         return 0
     fi
 
-    caldata_src="$REFERENCE_CALDATA"
-    if [ ! -f "$caldata_src" ]; then
-        echo "{\"ok\":false,\"error\":\"reference caldata not found: $(json_escape "$caldata_src")\"}"
+    if helper_available; then
+        if helper_result="$(helper_install_caldata 2>&1)"; then
+            log "installed caldata with C helper: $PRIMARY_CALDATA_PATH"
+            echo "{\"ok\":true,\"action\":\"installed\",\"method\":\"c_helper\",\"caldata_path\":\"$(json_escape "$PRIMARY_CALDATA_PATH")\",\"source\":\"$(json_escape "$REFERENCE_CALDATA")\",\"message\":\"caldata installed with rfeye-wmac-rebind; run reload to initialize WMAC\"}"
+            return 0
+        fi
+        echo "{\"ok\":false,\"error\":\"C helper caldata install failed\",\"detail\":\"$(json_escape "$helper_result")\"}"
         return 1
     fi
 
-    for caldata_dst in $CALDATA_PATHS; do
-        local dir
-        dir="$(dirname "$caldata_dst")"
-        mkdir -p "$dir" 2>/dev/null || continue
-        cp "$caldata_src" "$caldata_dst" 2>/dev/null || continue
-        log "installed caldata: $caldata_dst (from $caldata_src)"
-        installed_path="$caldata_dst"
-        break
-    done
-
-    if [ -z "$installed_path" ]; then
-        echo "{\"ok\":false,\"error\":\"failed to install caldata to any firmware path\"}"
-        return 1
+    if fallback_result="$(fallback_install_caldata 2>&1)"; then
+        echo "{\"ok\":true,\"action\":\"installed\",\"method\":\"shell_fallback\",\"caldata_path\":\"$(json_escape "$fallback_result")\",\"source\":\"$(json_escape "$REFERENCE_CALDATA")\",\"message\":\"caldata installed; run reload to initialize WMAC\"}"
+        return 0
     fi
 
-    echo "{\"ok\":true,\"action\":\"installed\",\"caldata_path\":\"$(json_escape "$installed_path")\",\"source\":\"$(json_escape "$caldata_src")\",\"message\":\"caldata installed, run reload to initialize WMAC with sysfs bind/unbind\"}"
+    echo "{\"ok\":false,\"error\":\"failed to install caldata\",\"detail\":\"$(json_escape "$fallback_result")\"}"
+    return 1
 }
 
 reload_cmd() {
-    local sysid model phy rebind_err=""
+    local sysid model phy rebind_err="" method="shell_fallback"
 
     sysid="$(get_board_sysid)"
     model="$(get_board_model)"
@@ -278,15 +308,22 @@ reload_cmd() {
         return 1
     fi
 
-    if rebind_err="$(rebind_wmac_platform 2>&1)"; then
-        phy="$(wmac_phy_name)"
-        create_monitor_iface "$phy"
-        if wmac_spectral_ready; then
-            log "WMAC spectral scanning ready on $phy after platform rebind"
-            echo "{\"ok\":true,\"action\":\"platform_rebound\",\"phy\":\"$(json_escape "$phy")\",\"spectral_ready\":true,\"message\":\"WMAC initialized via sysfs platform bind/unbind\"}"
+    if helper_available; then
+        method="c_helper"
+        if rebind_err="$(helper_rebind_wmac 2>&1)"; then
+            phy="$(wmac_phy_name)"
+            create_monitor_iface "$phy"
+            echo "{\"ok\":true,\"action\":\"platform_rebound\",\"method\":\"$method\",\"phy\":\"$(json_escape "$phy")\",\"spectral_ready\":$(wmac_spectral_ready && echo true || echo false),\"message\":\"WMAC rebound with rfeye-wmac-rebind\"}"
             return 0
         fi
-        echo "{\"ok\":true,\"action\":\"platform_rebound\",\"phy\":\"$(json_escape "$phy")\",\"spectral_ready\":false,\"message\":\"WMAC rebound but spectral_scan_ctl not found\"}"
+        log "C helper rebind failed: $rebind_err"
+    fi
+
+    method="shell_fallback"
+    if rebind_err="$(fallback_rebind_wmac_platform 2>&1)"; then
+        phy="$(wmac_phy_name)"
+        create_monitor_iface "$phy"
+        echo "{\"ok\":true,\"action\":\"platform_rebound\",\"method\":\"$method\",\"phy\":\"$(json_escape "$phy")\",\"spectral_ready\":$(wmac_spectral_ready && echo true || echo false),\"message\":\"WMAC rebound with shell sysfs fallback\"}"
         return 0
     fi
 
@@ -335,8 +372,9 @@ remove_cmd() {
         fi
     done
 
-    # Do not rmmod ath9k here. If currently bound, detach only the WMAC device.
-    if platform_bound && platform_unbind_available; then
+    if helper_available; then
+        helper_unbind_wmac >/dev/null 2>&1 || true
+    elif platform_bound && platform_unbind_available; then
         echo "$WMAC_PLATFORM_ID" > "$ATH9K_PLATFORM_DRIVER/unbind" 2>/dev/null || true
         log "unbound ath9k WMAC platform device $WMAC_PLATFORM_ID"
     fi
